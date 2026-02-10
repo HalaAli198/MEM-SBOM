@@ -3,7 +3,8 @@ from volatility3.framework.configuration import requirements
 from volatility3.plugins.linux import pslist
 import collections
 from volatility3.plugins.linux import elf_parsing
-from volatility3.framework.symbols.generic.types.python.sbom2_3_8_18_new import Python_3_8_18_IntermedSymbols
+#from volatility3.framework.symbols.generic.types.python.sbom2_3_8_18_new import Python_3_8_18_IntermedSymbols
+from volatility3.framework.symbols.generic.types.python.sbom_dep_graph import Python_3_8_18_IntermedSymbols
 import textwrap
 import dis
 import types
@@ -273,39 +274,32 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
         return False
    
     def get_python_object_info(self, obj_candidate, block_size, block_idx):
-      """Extract detailed information from a Python object"""
       try:
-        # Get basic object info
         obj_type = obj_candidate.get_type_name()
         refcnt = int(obj_candidate.ob_refcnt)
         address = obj_candidate.vol.offset
         
-        # Try to get object value (with safety limits)
         try:
             obj_value = obj_candidate.get_value(cur_depth=0, max_depth=1)
-            
-            # Truncate long values
             value_str = str(obj_value)
             if len(value_str) > 100:
                 value_str = value_str[:100] + "..."
-                
         except Exception:
             obj_value = f"<{obj_type} object>"
             value_str = obj_value
         
         return {
-        
             'block_index': block_idx,
             'address': hex(address),
             'type': obj_type,
-            'obj':obj_candidate,
+            'obj': obj_candidate,
             'refcnt': refcnt,
             'value': value_str,
             'block_size': block_size,
             'size_estimate': self.estimate_object_size(obj_candidate, obj_type)
         }
         
-      except Exception as e:
+      except Exception:
         return None
     
     
@@ -392,70 +386,111 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
       valid_objects = 0
       blocks_scanned = 0
       try:
-        
         proc_layer_name = task.add_process_layer()
         curr_layer = self.context.layers[proc_layer_name]
         block_size = pool_info['block_size']
         if not isinstance(block_size, int) or block_size <= 0:
             return []
-        pool_data_start = pool_obj.vol.offset + 48
-        allocated_blocks = pool_info['allocated_blocks']
+
+        pool_base = pool_obj.vol.offset
+        pool_data_start = pool_base + 48  # pool header is 48 bytes
         nextoffset = pool_info['nextoffset']
-        #print(f"    Pool: 0x{pool_obj.vol.offset:x}, Block size: {block_size}")
-        #print(f"    Allocated blocks: {allocated_blocks}, Next offset: {nextoffset}")
-        allocated_region_size = nextoffset - 48  # Subtract header size
-        max_allocated_blocks = allocated_region_size // block_size
-        for block_idx in range(min(max_allocated_blocks, allocated_blocks)):
-            blocks_scanned += 1
-            block_offset = pool_data_start + (block_idx * block_size)
-            if not curr_layer.is_valid(block_offset, block_size):
-                 continue
-            if block_offset >= (pool_obj.vol.offset + nextoffset):
+        allocated_region_end = pool_base + nextoffset
+
+        # === Build the free block set by walking the freelist ===
+        free_blocks = set()
+        freeblock_addr = pool_info['freeblock_addr']
+        max_free = (4096 - 48) // block_size  # safety bound
+
+        while freeblock_addr != 0:
+            # Must be within this pool's data region
+            if freeblock_addr < pool_data_start or freeblock_addr >= pool_base + 4096:
                 break
+            # Must be aligned to block_size
+            if (freeblock_addr - pool_data_start) % block_size != 0:
+                break
+            if freeblock_addr in free_blocks:
+                break  # cycle detected
+            if not curr_layer.is_valid(freeblock_addr, 8):
+                break
+
+            free_blocks.add(freeblock_addr)
+
+            if len(free_blocks) > max_free:
+                break  # safety: more free blocks than pool can hold
+
+            try:
+                next_ptr_bytes = curr_layer.read(freeblock_addr, 8)
+                freeblock_addr = int.from_bytes(next_ptr_bytes, byteorder='little')
+            except Exception:
+                break
+
+        # === Scan allocated blocks ===
+        max_blocks = (4096 - 48) // block_size
+
+        for block_idx in range(max_blocks):
+            block_offset = pool_data_start + (block_idx * block_size)
+
+            # Stop at the untouched/virgin region
+            if block_offset >= allocated_region_end:
+                break
+
+            # Skip free blocks
+            if block_offset in free_blocks:
+                continue
+
+            blocks_scanned += 1
+
+            if not curr_layer.is_valid(block_offset, min(block_size, 16)):
+                continue
+
             try:
                 # Read potential PyObject header
                 header_data = curr_layer.read(block_offset, 16)
-                
+
                 if len(header_data) >= 16:
                     refcnt = int.from_bytes(header_data[0:8], byteorder='little')
                     type_ptr = int.from_bytes(header_data[8:16], byteorder='little')
-                    
-                    # More permissive validation - even refcnt=0 might be valid in some cases
+
                     if self.is_valid_pyobject_header(refcnt, type_ptr, curr_layer):
-                        
                         try:
                             obj_candidate = self.context.object(
                                 object_type=python_table_name + constants.BANG + "PyObject",
                                 layer_name=proc_layer_name,
                                 offset=block_offset
                             )
+
+                            #obj_info = self.get_python_object_info(obj_candidate, block_size, block_idx)
                             
-                            obj_info = self.get_python_object_info(obj_candidate, block_size, block_idx)
-                            
-                            if obj_info:
-                                objects.append(obj_info)
+                            if obj_candidate.get_type_name()== 'module':
+                               
+                                try:
+                                  mod_obj = obj_candidate.cast_to("PyModuleObject")
+                                  module_name = mod_obj.get_name()
+                                  print(f"yessssssss {module_name}")
+                                except exceptions.InvalidAddressException:
+                                   print(f"  Invalid address for module object in class {k}")
+                                   continue
+                                except Exception as e:
+                                 print(f"  Error getting module name: {e}")
+                                 continue
+                                objects.append(obj_candidate)
                                 valid_objects += 1
-                                self.print_object_summary(obj_info, block_idx)
-                                # Show first few objects for debugging
-                                #if valid_objects <= 5:
-                                   # self.print_object_summary(obj_info, block_idx)
-                            
-                           
-                            
-                        except Exception as e:
-                            # Failed to interpret as PyObject
+                                #self.print_object_summary(obj_info, block_idx)
+                            else:
+                              continue
+
+                        except Exception:
                             pass
-                            
-            except Exception as e:
-                # Failed to read block
+
+            except Exception:
                 pass
-        
-       # print(f"Extraction complete: {valid_objects}/{blocks_scanned} valid objects found")
-        if objects:  # Only summarize if we have objects
-            self.summarize_object_types(objects)
-        
+
+        #if objects:
+          #  self.summarize_object_types(objects)
+
         return objects
-        
+
       except Exception as e:
         print(f"Pool extraction error: {e}")
         return []
@@ -561,7 +596,35 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
 
     
    
-   
+    def get_pool_info(self):
+      block_size = self.get_block_size()
+      ref_count = self.get_ref_count()
+    
+      if isinstance(block_size, int) and block_size > 0:
+        usable_space = 4096 - 48
+        max_blocks = usable_space // block_size
+        utilization = (ref_count / max_blocks * 100) if max_blocks > 0 else 0
+      else:
+        max_blocks = "Unknown"
+        utilization = "Unknown"
+    
+      # Fix: safely read freeblock address
+      try:
+        freeblock_val = int(self.member('freeblock'))
+      except Exception:
+        freeblock_val = 0
+    
+      return {
+        'block_size': block_size,
+        'allocated_blocks': ref_count,
+        'max_blocks': max_blocks,
+        'utilization_percent': utilization,
+        'arena_index': int(self.arenaindex),
+        'size_class': int(self.szidx),
+        'nextoffset': int(self.nextoffset),
+        'maxnextoffset': int(self.maxnextoffset),
+        'freeblock_addr': freeblock_val
+      }
    
     def _collect_data(self, tasks):
         collected_data=[]
