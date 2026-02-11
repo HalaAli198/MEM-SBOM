@@ -126,5 +126,4 @@ For Python versions **not available** through system packages, use [pyenv](https
     - Non-debug libraries lack the DWARF information needed for symbol extraction.
  4. **pyenv build missing debug `.so` file:**
     - Ensure you used both `--with-pydebug` and `--enable-shared` flags.
-    - Rebuild with: ```PYTHON_CONFIGURE_OPTS="--with-pydebug --enable-shared" pyenv install <version> -f```
-``````
+
