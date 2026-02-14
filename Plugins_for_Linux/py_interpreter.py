@@ -2,7 +2,7 @@ from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
 from volatility3.plugins.linux import pslist
 from volatility3.plugins.linux import elf_parsing
-
+import re
 
 #https://github.com/python/cpython/blob/main/Include/internal/pycore_runtime.h
 #https://github.com/python/cpython/blob/3.14/Include/internal/pycore_runtime_structs.h
@@ -262,7 +262,7 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
             print("Could not detect Python version")
             return []
 
-        offset = self.get_interpreters_head_offset(version)
+        offset = self.get_interpreters_head_offset(version, py_runtime)
         interpreters_head = py_runtime + offset
         print(f"_PyRuntime=0x{py_runtime:x}  +0x{offset:x}  --> interpreters.head at 0x{interpreters_head:x}")
 
@@ -289,7 +289,7 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
             python_table_name = Python_3_8_18_IntermedSymbols.create(
                 self.context, self.config_path,
                 sub_path="generic/types/python",
-                filename="python-3_8-x64_2",
+                filename="python38",
             )
         else:
             print(f"Unsupported Python version: {version}")
