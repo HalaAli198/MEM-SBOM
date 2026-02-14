@@ -24,7 +24,6 @@ class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
         self.set_type_class("PyDictKeysObject", PyDictKeysObject)
         self.set_type_class("PyDictKeyEntry", PyDictKeyEntry)
         self.set_type_class("PyASCIIObject", PyASCIIObject)
-        self.set_type_class("PyBoolObject", PyBoolObject)
         self.set_type_class("PyLongObject", PyLongObject)
         self.set_type_class("PyTupleObject", PyTupleObject)
         self.set_type_class("PyListObject", PyListObject)
@@ -50,7 +49,6 @@ class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
         self.set_type_class("PyCellObject", PyCellObject)
         self.set_type_class("classmethod", classmethod)
         self.set_type_class("staticmethod", staticmethod)
-        self.set_type_class("PyPropertyObject", PyPropertyObject)
         self.set_type_class("PyByteArrayObject", PyByteArrayObject)
         self.set_type_class("PyCapsule", PyCapsule)
         self.set_type_class("PyComplexObject", PyComplexObject)
@@ -66,9 +64,9 @@ class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
         self.set_type_class("PyGenObject", PyGenObject)
         self.set_type_class("PyCoroObject", PyCoroObject)
         self.set_type_class("PyAsyncGenObject", PyAsyncGenObject)
-        self.set_type_class("PyInterpreterState_head", PyInterpreterState_head)
+        self.set_type_class("_typeobject", PyTypeObject)
         self.set_type_class("arena_object", arena_object)
-        self.set_type_class("pool_ref_union", pool_ref_union)
+       
         self.set_type_class("pool_header", pool_header)
         self.set_type_class("block", block)
         
@@ -134,24 +132,6 @@ class arena_object(objects.StructType):
 
 
 
-class pool_ref_union(objects.StructType):
-    @property
-    def _padding(self):
-        """Access as block pointer"""
-        return self.member('_padding')
-    
-    @property
-    def count(self):
-        """Access as unsigned int count"""
-        return self.member('count')
-    
-    def get_count_value(self):
-        """Get the count value as integer"""
-        return int(self.count)
-    
-    def get_padding_address(self):
-        """Get the padding pointer address"""
-        return int(self._padding)
 
 class pool_header(objects.StructType):
     @property
@@ -306,23 +286,15 @@ class PyGC_Head(objects.StructType):
         return int.from_bytes(self._context.layers[self.vol.layer_name].read(self.vol.offset + 8, 8), byteorder='little')
 
 
-class PyInterpreterState_head(objects.StructType):
-    @property
-    def next(self):
-        return self.member('next')
-
-    @property
-    def tstate_head(self):
-        return self.member('tstate_head')
 
 class PyObject(objects.StructType): 
     def get_type(self, name):
         types = {
              'NoneType': 'None','str': 'PyASCIIObject', 'int': 'PyLongObject', 'method_descriptor': 'PyMethodDescrObject',
-            'bool': 'PyBoolObject', 'tuple': 'PyTupleObject', 'list': 'PyListObject','wrapper_descriptor': 'PyWrapperDescrObject',  'method-wrapper': 'wrapperobject',
+             'tuple': 'PyTupleObject', 'list': 'PyListObject','wrapper_descriptor': 'PyWrapperDescrObject',  'method-wrapper': 'wrapperobject',
             'set': 'PySetObject', 'frozenset': 'PySetObject', 'function': 'PyFunctionObject', 'methoddef':'PyMethodDef','member_descriptor': 'PyMemberDescrObject',
-            'code': 'PyCodeObject', 'bytes': 'PyBytesObject', 'Parameter': 'PyInstanceObject','builtin_function_or_method':'PyCFunctionObject',
-            'dict': 'PyDictObject', 'float': 'PyFloatObject','getset_descriptor': 'PyGetSetDescrObject', 'generator':'PyGenObject','coroutine':'PyCoroObject','async_generator':'PyAsyncGenObject','property': 'PyPropertyObject', 
+            'code': 'PyCodeObject', 'bytes': 'PyBytesObject','builtin_function_or_method':'PyCFunctionObject',
+            'dict': 'PyDictObject', 'float': 'PyFloatObject','getset_descriptor': 'PyGetSetDescrObject', 'generator':'PyGenObject','coroutine':'PyCoroObject','async_generator':'PyAsyncGenObject',
             'module': 'PyModuleObject', 'type': 'PyTypeObject', 'weakref':'PyWeakReference',  'OrderedDict': 'PyODictObject','staticmethod':'staticmethod',
              'collections.OrderedDict': 'PyODictObject',  'cell': 'PyCellObject', 'classmethod': 'classmethod','bytearray': 'PyByteArrayObject',
         'complex': 'PyComplexObject','enumerate': 'enumobject','frame': 'PyFrameObject', 'range': 'rangeobject','slice': 'PySliceObject', 'method': 'PyMethodObject', 'capsule':'PyCapsule', }
@@ -663,31 +635,7 @@ class PyTypeObject(PyObject):
             # For fixed-size objects, we can just return the basic size
             return basic_size
 
-
-class PyPropertyObject(PyObject):
-    @property
-    def fget(self):
-        return self.member('fget')
-
-    @property
-    def fset(self):
-        return self.member('fset')
-        
-    @property
-    def fdel(self):
-        return self.member('fdel')
-        
-    @property
-    def __doc__(self):
-        return self.member('__doc__')
-        
-    def get_value(self, cur_depth=0, max_depth=10, visited=None):
-        try:
-            doc = self.__doc__.dereference().get_value()
-            return f"<property {doc}>"
-        except Exception as e:
-            return f"<property at {hex(self.vol.offset)}>"
-            
+    
             
             
 class PyGetSetDescrObject(PyObject):
@@ -1660,8 +1608,8 @@ class PyModuleObject(PyObject):
     
 class PyDictKeysObject(PyObject):
     @property
-    def dk_log2_size(self):
-        return self.member('dk_log2_size')
+    def dk_size(self):
+        return self.member('dk_size')
 
     @property
     def dk_nentries(self):
@@ -1671,7 +1619,7 @@ class PyDictKeysObject(PyObject):
     def dk_indices(self):
         return self.member('dk_indices')
     def get_indices_size(self):
-        dk_size = self.dk_log2_size
+        dk_size = self.dk_size
         if dk_size <= 0xff:
             return dk_size
         elif dk_size <= 0xffff:
@@ -1737,21 +1685,24 @@ class PyDictKeyEntry(PyObject):
         return self.me_key.dereference().get_value(cur_depth, max_depth, visited)
 
 class PyASCIIObject(PyObject):
-
     def get_value(self, cur_depth=0, max_depth=10, visited=None):
-       
-        COMPACT = (self.state >> 5) & 1
-        ASCII = (self.state >> 6) & 1
-        KIND = (self.state >> 2) & 0b111
         curr_layer = self._context.layers[self.vol.layer_name]
 
+        # state is a bitfield struct at offset 32, read as raw uint32
+        state_val = int.from_bytes(curr_layer.read(self.vol.offset + 32, 4), 'little')
+        COMPACT = (state_val >> 5) & 1
+        ASCII = (state_val >> 6) & 1
+        KIND = (state_val >> 2) & 0b111
+
+        length = int(self.length)
+
         if ASCII and COMPACT:
-            string = curr_layer.read(self.vol.offset + self.vol.size, self.length, pad=False)
+            string = curr_layer.read(self.vol.offset + self.vol.size, length, pad=False)
         elif not ASCII and COMPACT:
-            string = curr_layer.read(self.vol.offset + 72, self.length * KIND, pad=False)
+            string = curr_layer.read(self.vol.offset + 72, length * KIND, pad=False)
         else:
-            string = curr_layer.read(self.vol.offset + self.vol.size, self.length, pad=False)
-       # print(f"COMPACT: {COMPACT}, ASCII: {ASCII}, KIND: {KIND}")
+            string = curr_layer.read(self.vol.offset + self.vol.size, length, pad=False)
+
         try:
             if KIND == 1:
                 return string.decode("utf-8", errors='replace')
@@ -1762,10 +1713,10 @@ class PyASCIIObject(PyObject):
             else:
                 return string.decode("utf-8", errors='replace')
         except UnicodeDecodeError:
-           try:
-             return string.decode("latin-1")
-           except UnicodeDecodeError:
-             return f"UNICODE_DECODE_ERROR: {string!r}"
+            try:
+                return string.decode("latin-1")
+            except UnicodeDecodeError:
+                return f"UNICODE_DECODE_ERROR: {string!r}"
 
 
 class PyPickleBufferObject(PyObject):
@@ -1932,11 +1883,6 @@ class PyCodeObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=10, visited=None):
      
       return self.get_code_info()
-
-class PyBoolObject(PyObject):
-    def get_value(self, cur_depth=0, max_depth=None, visited=None):
-        
-        return bool(self.ob_digit)
 
 class PyLongObject(PyObject):
     def get_sign(self, num):
