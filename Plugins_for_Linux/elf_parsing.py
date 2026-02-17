@@ -220,7 +220,7 @@ def file_offset_to_vaddr(segments: List[Dict], file_offset: int, is_pie: bool,
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1: Section headers → .symtab/.dynsym
+# Strategy 1: Section headers -> .symtab/.dynsym
 #
 # Section headers live at e_shoff in the ELF file. Normally the kernel
 # doesn't need them and they're beyond the last PT_LOAD, so they're NOT
@@ -378,7 +378,7 @@ def search_section_symbols(
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2: PT_DYNAMIC → .dynsym/.dynstr
+# Strategy 2: PT_DYNAMIC -> .dynsym/.dynstr
 #
 # The dynamic segment is ALWAYS mapped (the runtime linker needs it).
 # It contains DT_SYMTAB, DT_STRTAB, DT_STRSZ entries that point directly
@@ -387,25 +387,31 @@ def search_section_symbols(
 # internals like 'arenas' are usually static/local — so this alone
 # won't find everything we need.
 # ---------------------------------------------------------------------------
+def _resolve_dynamic_ptr(base_address: int, raw_val: int, is_pie: bool) -> int:
+    """
+    Resolve a pointer from PT_DYNAMIC. The dynamic linker may have
+    already relocated these to absolute addresses in memory.
+    """
+    if not is_pie:
+        return raw_val
+    if raw_val > base_address:
+        return raw_val
+    return base_address + raw_val
+
 
 def search_dynamic_symbols(
     layer, base_address: int, elf_info: Dict,
     symbol_names: Set[str], segments: List[Dict],
 ) -> Dict[str, int]:
-    """
-    Resolve symbols through the dynamic symbol table.
-    PT_DYNAMIC is always present for dynamically-linked binaries.
-    """
     found = {}
     remaining = set(symbol_names)
     is_64  = elf_info["is_64"]
     is_pie = elf_info["is_pie"]
 
-    # Locate the PT_DYNAMIC segment
     dynamic_vaddr = None
     dynamic_memsz = None
     for seg in segments:
-        if seg["type"] == 2:  # Locate the PT_DYNAMIC segment
+        if seg["type"] == 2:
             dynamic_vaddr = seg["vaddr"]
             dynamic_memsz = seg["memsz"]
             break
@@ -416,14 +422,6 @@ def search_dynamic_symbols(
     dynamic_addr = _resolve_addr(base_address, dynamic_vaddr, is_pie)
     dyn_entry_size = 16 if is_64 else 8
 
-    # Walk the dynamic array collecting the tags we need:
-    #   DT_STRTAB (5)  = address of .dynstr
-    #   DT_SYMTAB (6)  = address of .dynsym
-    #   DT_STRSZ  (10) = size of .dynstr in bytes
-    #   DT_SYMENT (11) = size of one Elf_Sym entry
-    #   DT_HASH   (4)  = address of the symbol hash table (gives us nchain = symbol count)
-    #   DT_GNU_HASH (0x6ffffef5) = GNU hash table (alternative to DT_HASH)
-   
     dt = {}
     needed_tags = {5, 6, 10, 11, 4, 0x6ffffef5}
     offset = 0
@@ -443,43 +441,85 @@ def search_dynamic_symbols(
             dt[d_tag] = d_val
         offset += dyn_entry_size
 
-    symtab_raw  = dt.get(6)  # DT_SYMTAB
-    strtab_raw  = dt.get(5)  # DT_STRTAB
-    strtab_size = dt.get(10) # DT_STRTAB
-    syment_size = dt.get(11) # DT_SYMENT
+    symtab_raw  = dt.get(6)
+    strtab_raw  = dt.get(5)
+    strtab_size = dt.get(10)
+    syment_size = dt.get(11)
 
     if None in (symtab_raw, strtab_raw, strtab_size):
         return found
     if syment_size is None:
         syment_size = 24 if is_64 else 16
 
-    # DT_SYMTAB/DT_STRTAB hold virtual addresses, not file offsets.
-    # For PIE binaries these are relative to the load base.
-    if is_pie:
-        symtab_addr = base_address + symtab_raw
-        strtab_addr = base_address + strtab_raw
-    else:
-        symtab_addr = symtab_raw
-        strtab_addr = strtab_raw
+    symtab_addr = _resolve_dynamic_ptr(base_address, symtab_raw, is_pie)
+    strtab_addr = _resolve_dynamic_ptr(base_address, strtab_raw, is_pie)
 
-    # Try to get an exact symbol count from DT_HASH.
-    # The SYSV hash table starts with [nbucket, nchain] — nchain == number of symbols.
+    print(f"  symtab: raw=0x{symtab_raw:x} resolved=0x{symtab_addr:x}")
+    print(f"  strtab: raw=0x{strtab_raw:x} resolved=0x{strtab_addr:x} size={strtab_size}")
+
+    # Symbol count
     num_symbols = None
+
     dt_hash = dt.get(4)
     if dt_hash is not None:
-        hash_addr = (base_address + dt_hash) if is_pie else dt_hash
+        hash_addr = _resolve_dynamic_ptr(base_address, dt_hash, is_pie)
         hash_hdr = _read_bytes(layer, hash_addr, 8)
         if hash_hdr:
-            num_symbols = int.from_bytes(hash_hdr[4:8], 'little')
-    
-    # If we can't determine the count, use a generous upper bound.
-    # We'll stop early once we find everything anyway.
+            nchain = int.from_bytes(hash_hdr[4:8], 'little')
+            if 0 < nchain < 1_000_000:
+                num_symbols = nchain
+                print(f"  DT_HASH nchain={nchain}")
+
+    dt_gnu_hash = dt.get(0x6ffffef5)
+    if dt_gnu_hash is not None and num_symbols is None:
+        gnu_hash_addr = _resolve_dynamic_ptr(base_address, dt_gnu_hash, is_pie)
+        gnu_hdr = _read_bytes(layer, gnu_hash_addr, 16)
+        if gnu_hdr:
+            nbuckets  = int.from_bytes(gnu_hdr[0:4], 'little')
+            symndx    = int.from_bytes(gnu_hdr[4:8], 'little')
+            maskwords = int.from_bytes(gnu_hdr[8:12], 'little')
+            if 0 < nbuckets < 1_000_000 and 0 < maskwords < 1_000_000:
+                bloom_size = maskwords * (8 if is_64 else 4)
+                buckets_offset = 16 + bloom_size
+                chains_offset = buckets_offset + nbuckets * 4
+                buckets_addr = gnu_hash_addr + buckets_offset
+                buckets_data = _read_bytes(layer, buckets_addr, nbuckets * 4)
+                if buckets_data:
+                    max_bucket = 0
+                    for i in range(nbuckets):
+                        val = int.from_bytes(buckets_data[i*4:(i+1)*4], 'little')
+                        if val > max_bucket:
+                            max_bucket = val
+                    if max_bucket >= symndx:
+                        chain_base = gnu_hash_addr + chains_offset
+                        idx = max_bucket
+                        while idx < max_bucket + 100000:
+                            chain_entry_addr = chain_base + (idx - symndx) * 4
+                            chain_val = _read_bytes(layer, chain_entry_addr, 4)
+                            if chain_val is None:
+                                break
+                            if int.from_bytes(chain_val, 'little') & 1:
+                                num_symbols = idx + 1
+                                print(f"  DT_GNU_HASH: {num_symbols} symbols")
+                                break
+                            idx += 1
+
+    if num_symbols is None and strtab_raw > symtab_raw:
+        gap = (strtab_addr - symtab_addr)
+        derived = gap // syment_size
+        if 0 < derived < 1_000_000:
+            num_symbols = derived
+            print(f"  Symbol count from gap: {num_symbols}")
+
     if num_symbols is None:
         num_symbols = 50000
 
     strtab_data = _read_bytes(layer, strtab_addr, min(strtab_size, 1 << 20))
     if strtab_data is None:
+        print(f"  ERROR: Cannot read strtab at 0x{strtab_addr:x} size={strtab_size}")
         return found
+
+    print(f"  strtab read OK: {len(strtab_data)} bytes, num_symbols={num_symbols}")
 
     for j in range(num_symbols):
         sym_bytes = _read_bytes(layer, symtab_addr + j * syment_size, syment_size)
@@ -504,7 +544,7 @@ def search_dynamic_symbols(
             resolved = _resolve_addr(base_address, st_value, is_pie)
             found[sym_name] = resolved
             remaining.discard(sym_name)
-            vollog.info(f"[dynamic] Found '{sym_name}' at 0x{resolved:x}")
+            print(f"  FOUND '{sym_name}' at index {j}, st_value=0x{st_value:x}, resolved=0x{resolved:x}")
             if not remaining:
                 return found
 
@@ -872,7 +912,137 @@ def scan_bss_for_arenas(
 
     return found
 
+def scan_bss_for_pyruntime(
+    layer, base_address: int, elf_info: Dict,
+    task, context, proc_layer_name: str,
+) -> Dict[str, int]:
+    """
+    Find _PyRuntime by scanning writable segments of the Python binary
+    for the _PyRuntimeState struct signature.
 
+    _PyRuntime lives in:
+      - .bss for Python 3.7-3.8 (uninitialized global)
+      - .data for Python 3.9+ (statically initialized via _PyRuntimeState_INIT)
+
+    Key signature (3.7-3.13):
+      _PyRuntime + interp_head_offset:     interpreters.head
+      _PyRuntime + interp_head_offset + 8: interpreters.main  (== head for single-interp)
+      _PyRuntime + interp_head_offset + 16: interpreters.next_id (== 1)
+    """
+    found = {}
+
+    # Collect writable VMAs belonging to the Python binary OR libpython
+    python_rw_regions = []
+    for vma in task.mm.get_vma_iter():
+        try:
+            path = vma.get_name(context, task)
+        except Exception:
+            continue
+        path_str = str(path) if path else ""
+        if "python" not in path_str.lower():
+            continue
+        if "/bin/" not in path_str and "libpython" not in path_str.lower():
+            continue
+        flags = vma.get_protection()
+        if 'w' not in flags:
+            continue
+        python_rw_regions.append((int(vma.vm_start), int(vma.vm_end), path_str))
+
+    # Also include adjacent anonymous mappings (.bss overflow)
+    all_vmas = []
+    for vma in task.mm.get_vma_iter():
+        all_vmas.append((int(vma.vm_start), int(vma.vm_end), vma))
+
+    for vma_start, vma_end, vma in all_vmas:
+        try:
+            path = vma.get_name(context, task)
+        except Exception:
+            path = None
+        if path and "Anonymous" not in str(path):
+            continue
+        for rw_start, rw_end, _ in list(python_rw_regions):
+            if vma_start == rw_end:
+                python_rw_regions.append((vma_start, vma_end, "anonymous(.bss)"))
+                break
+
+    # Cover all known CPython versions (3.7 through 3.13+).
+    # The interpreters sub-struct offset within _PyRuntimeState grows
+    # as new fields are added in each version:
+    #   3.7-3.8:  0x10-0x20
+    #   3.9-3.10: 0x20-0x50
+    #   3.11-3.12: 0x28-0x60
+    #   3.13+:     0x40-0x100+
+    candidate_interp_offsets = list(range(0x10, 0x120, 0x8))
+
+    for region_start, region_end, region_path in python_rw_regions:
+        scan_size = min(region_end - region_start, 0x100000)
+        try:
+            data = layer.read(region_start, scan_size, pad=False)
+        except Exception:
+            continue
+
+        for interp_offset in candidate_interp_offsets:
+            if scan_size < interp_offset + 24:
+                continue
+
+            for offset in range(0, scan_size - interp_offset - 24, 8):
+                # Read the three fields: head, main, next_id
+                head_ptr = int.from_bytes(
+                    data[offset + interp_offset:offset + interp_offset + 8], 'little'
+                )
+                if head_ptr == 0 or head_ptr < 0x10000 or head_ptr > 0x7fffffffffff:
+                    continue
+
+                main_ptr = int.from_bytes(
+                    data[offset + interp_offset + 8:offset + interp_offset + 16], 'little'
+                )
+                # Single interpreter: head == main
+                if head_ptr != main_ptr:
+                    continue
+
+                next_id = int.from_bytes(
+                    data[offset + interp_offset + 16:offset + interp_offset + 24], 'little'
+                )
+                if next_id != 1:
+                    continue
+
+                # Validate that head_ptr points to readable, non-zero memory
+                test = _read_bytes(layer, head_ptr, 16)
+                if test is None or all(b == 0 for b in test):
+                    continue
+
+                candidate_addr = region_start + offset
+
+                # Validate the PyInterpreterState that head_ptr points to.
+                # The main interpreter always has id == 0. Check several
+                # possible offsets for the id field across versions.
+                interp_looks_valid = False
+                for id_offset in (0x10, 0x18, 0x20, 0x28, 0x30, 0x38):
+                    interp_id_val = _read_int(layer, head_ptr + id_offset, 8)
+                    if interp_id_val is not None and interp_id_val == 0:
+                        next_interp = _read_int(layer, head_ptr, 8)
+                        if next_interp is not None and (next_interp == 0 or
+                                (0x10000 < next_interp < 0x7fffffffffff)):
+                            interp_looks_valid = True
+                            break
+
+                if not interp_looks_valid:
+                    continue
+
+                # Reject false positives from zeroed memory
+                if offset + interp_offset + 48 <= len(data):
+                    tail = data[offset + interp_offset + 24:offset + interp_offset + 48]
+                    if all(b == 0 for b in tail):
+                        continue
+
+                found["_PyRuntime"] = candidate_addr
+                vollog.info(
+                    f"[bss_scan] Found _PyRuntime at 0x{candidate_addr:x} "
+                    f"(interp_head at +0x{interp_offset:x} -> 0x{head_ptr:x})"
+                )
+                return found
+
+    return found
 # ---------------------------------------------------------------------------
 # Master resolution — runs all strategies in order of reliability
 # ---------------------------------------------------------------------------
@@ -896,7 +1066,7 @@ def resolve_symbols(
 
 
     segments = parse_load_segments(layer, base_address, elf_info)
-    vollog.info(f"Found {len(segments)} program headers, "
+    print(f"Found {len(segments)} program headers, "
                 f"{sum(1 for s in segments if s['type']==1)} PT_LOAD segments")
 
    
@@ -929,7 +1099,12 @@ def resolve_symbols(
         found.update(scan_bss_for_arenas(
             layer, base_address, elf_info, task, context, proc_layer_name
         ))
-
+    # Strategy 6: structural scan for _PyRuntime in .bss/.data
+    if "_PyRuntime" in remaining and task is not None:
+        found.update(scan_bss_for_pyruntime(
+            layer, base_address, elf_info, task, context, proc_layer_name
+        ))
+    print(f"resolve_symbols returning: {found}, remaining: {target_set - set(found.keys())}")
     return found
 
 
@@ -987,31 +1162,48 @@ def find_symbol_in_process(
     context, proc_layer_name: str, task,
     module_substring: str, symbol_names: List[str],
 ) -> Dict[str, int]:
-    
     """
     Top-level entry point: find symbols in a Python module within a live process.
 
     Tries module_substring first (e.g. "libpython" for shared-library builds),
     then falls back to "python" (for statically-linked builds where the binary
     itself contains the symbols).
+
+    Unlike the previous version, this tries BOTH bases if the first one
+    doesn't resolve all requested symbols.
     """
     layer = context.layers[proc_layer_name]
+    all_found = {}
+    remaining = list(symbol_names)
+
+    # Build a list of candidate ELF bases to search, in priority order
+    candidates = []
 
     result = find_python_module_base(context, proc_layer_name, task, module_substring)
-    if result is None:
-        result = find_python_module_base(context, proc_layer_name, task, "python")
-    if result is None:
-        vollog.warning(f"Could not find module matching '{module_substring}' or 'python'")
-        return {}
+    if result is not None:
+        candidates.append(result)
 
-    base_address, path = result
-    vollog.info(f"Found Python ELF: {path} at 0x{base_address:x}")
+    # Always also try "python" as a fallback base, even if the first matched
+    if module_substring.lower() != "python":
+        result2 = find_python_module_base(context, proc_layer_name, task, "python")
+        if result2 is not None and (not candidates or result2[0] != candidates[0][0]):
+            candidates.append(result2)
 
-    return resolve_symbols(
-        layer, base_address, symbol_names,
-        task=task, context=context, proc_layer_name=proc_layer_name,
-    )
+    for base_address, path in candidates:
+        if not remaining:
+            break
 
+        print(f"Searching ELF: {path} at 0x{base_address:x} for {remaining}")
+
+        found = resolve_symbols(
+            layer, base_address, remaining,
+            task=task, context=context, proc_layer_name=proc_layer_name,
+        )
+
+        all_found.update(found)
+        remaining = [s for s in remaining if s not in all_found]
+
+    return all_found
 
 # ---------------------------------------------------------------------------
 # Standalone plugin — can be run from the command line for debugging

@@ -612,7 +612,7 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
         print(f"Detected Python version: {version}")
         collected_data=[]
         if version and version[:2] == (3, 8):
-           from volatility3.framework.symbols.generic.types.python.sbom_dep_graph import Python_3_8_18_IntermedSymbols
+           from volatility3.framework.symbols.generic.types.python.python38_handler import Python_3_8_18_IntermedSymbols
            python_table_name = Python_3_8_18_IntermedSymbols.create(self.context, self.config_path, sub_path="generic/types/python", filename="python38")
       
         else:

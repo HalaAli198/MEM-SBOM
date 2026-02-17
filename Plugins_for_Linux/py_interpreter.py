@@ -10,10 +10,59 @@ PYRUNTIME_INTERP_HEAD_OFFSETS = {
     (3, 7):  0x10,   # PyRuntimeState.interpreters.head
     (3, 8):  0x20,   # _PyRuntimeState.interpreters.head
     (3, 9):  0x20,
-    (3, 10): 0x28,
+    (3, 10): 0x20,
     (3, 11): 0x28,
+    (3, 12): 0x28,
 } # 3.12+ handled dynamically via debug_offsets
+DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 
+#==========================================================================
+# SYMBOL TABLE REGISTRY - maps Python version to loader parameters
+# ==========================================================================
+SYMBOL_TABLE_REGISTRY = {
+    (3, 8): (
+        'volatility3.framework.symbols.generic.types.python.python38_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python38',
+    ),
+    (3, 9): (
+        'volatility3.framework.symbols.generic.types.python.python38_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python39',
+    ),
+    (3, 10): (
+        'volatility3.framework.symbols.generic.types.python.python38_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python310',
+    ),
+    (3, 11): (
+        'volatility3.framework.symbols.generic.types.python.python311_handler',
+        'Python_3_11_IntermedSymbols',
+        'generic/types/python',
+        'python311',
+    ),
+    (3, 12): (
+        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'Python_3_12_IntermedSymbols',
+        'generic/types/python',
+        'python312',
+    ),
+    (3, 13): (
+        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'Python_3_12_IntermedSymbols',
+        'generic/types/python',
+        'python313',
+    ),
+    (3, 14): (
+        'volatility3.framework.symbols.generic.types.python.python314_handler',
+        'Python_3_14_IntermedSymbols',
+        'generic/types/python',
+        'python314',
+    ),
+}
 class Py_Interpreter(interfaces.plugins.PluginInterface):
     """
     Py_Interpreter - Extract loaded modules from CPython interpreter state
@@ -74,81 +123,83 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     # Symbol resolution via elf_parsing
     # ------------------------------------------------------------------
-
     def find_py_runtime_address(self, task):
-        """
-        Resolves the _PyRuntime global symbol from the Python process's
-        ELF image using elf_parsing.find_symbol_in_process.
+      """
+      Resolves the _PyRuntime global symbol from the Python process's
+      ELF image using elf_parsing.find_symbol_in_process.
 
-        Steps:
-          1. Try libpython*.so first (shared/pyenv builds)
-          2. Fall back to the python binary itself (static/system builds)
+      The updated find_symbol_in_process searches both libpython and
+      the python binary automatically.
+      """
+      try:
+        proc_layer_name = task.add_process_layer()
+      except exceptions.InvalidAddressException:
+        return None
 
-        Returns:
-            int: Memory address of _PyRuntime, or None if not found.
-        """
-        try:
-            proc_layer_name = task.add_process_layer()
-        except exceptions.InvalidAddressException:
-            return None
+      # find_symbol_in_process now tries libpython first, then the
+      # python binary, searching both if needed
+      resolved = elf_parsing.find_symbol_in_process(
+        self.context, proc_layer_name, task,
+        module_substring="libpython",
+        symbol_names=["_PyRuntime"],
+      )
 
-        symbol_names = ["_PyRuntime"]
+      runtime_addr = resolved.get("_PyRuntime")
+      if runtime_addr:
+        print(f"Resolved _PyRuntime at: 0x{runtime_addr:x}")
+      else:
+        print("ERROR: Could not resolve _PyRuntime from ELF symbols")
+        print(f"  Symbols found: {resolved}")
 
-        # Strategy 1: shared library (pyenv / custom builds)
-        resolved = elf_parsing.find_symbol_in_process(
-            self.context, proc_layer_name, task,
-            module_substring="libpython",
-            symbol_names=symbol_names,
-        )
-
-        # Strategy 2: statically-linked binary (system Python)
-        if not resolved or "_PyRuntime" not in resolved:
-            resolved_fallback = elf_parsing.find_symbol_in_process(
-                self.context, proc_layer_name, task,
-                module_substring="python",
-                symbol_names=symbol_names,
-            )
-            if resolved_fallback:
-                resolved.update(resolved_fallback)
-
-        runtime_addr = resolved.get("_PyRuntime")
-        if runtime_addr:
-            print(f"Resolved _PyRuntime at: 0x{runtime_addr:x}")
-        else:
-            print("ERROR: Could not resolve _PyRuntime from ELF symbols")
-            print(f"  Symbols found: {resolved}")
-
-        return runtime_addr
+      return runtime_addr
     
     
     # ------------------------------------------------------------------
-    # Interpreter walking
+    # Interpreter head resolution
     # ------------------------------------------------------------------
 
     def get_interpreters_head_offset(self, version, py_runtime_addr):
-      key = version[:2]
+        """
+        Returns the address of the first PyInterpreterState.
 
-      # 3.12+ embeds _Py_DebugOffsets as the first field of _PyRuntime.
-      # runtime_state.interpreters_head sits at byte 40 within it.
-      if key >= (3, 12):
-        raw = self.context.layers[self.process_layer].read(py_runtime_addr + 40, 8)
-        offset = int.from_bytes(raw, 'little')
-        print(f"Read interpreters_head offset from debug_offsets: 0x{offset:x}")
-        return offset
+        Resolution:
+          3.7-3.12: hardcoded offset table (PYRUNTIME_INTERP_HEAD_OFFSETS)
+          3.13+:    read from _Py_DebugOffsets.runtime_state.interpreters_head
+                    _Py_DebugOffsets is at _PyRuntime + 0x0 (first field)
+                    interpreters_head is at debug_offsets + 0x28
+        """
+        key = version[:2]
 
-      # Older versions: use hardcoded table
-      offset = PYRUNTIME_INTERP_HEAD_OFFSETS.get(key)
-      if offset is not None:
-         return offset
+        if key >= (3, 13):
+            # _Py_DebugOffsets is at _PyRuntime + 0x0
+            # runtime_state.interpreters_head is at debug_offsets + 0x28
+            raw = self.context.layers[self.process_layer].read(
+                py_runtime_addr + DEBUG_OFFSETS_INTERP_HEAD_POS, 8
+            )
+            offset = int.from_bytes(raw, 'little')
+            print(f"  interpreters.head offset from debug_offsets: 0x{offset:x}")
+        else:
+            offset = PYRUNTIME_INTERP_HEAD_OFFSETS.get(key, 0x20)
+            print(f"  interpreters.head offset from table: 0x{offset:x}")
 
-      print(f"WARNING: No known offset for Python {key}, falling back to 0x20")
-      return 0x20
+        # Dereference the pointer at _PyRuntime + offset
+        head_ptr_addr = py_runtime_addr + offset
+        head_bytes = self.context.layers[self.process_layer].read(head_ptr_addr, 8)
+        head_addr = int.from_bytes(head_bytes, 'little')
+
+        if head_addr:
+            print(f"Interpreter head at 0x{head_addr:x}")
+        else:
+            print("ERROR: interpreters.head is NULL")
+
+        return head_addr
+
     
     
     # ------------------------------------------------------------------
-    # Interpreter walking — returns [(addr, name, module_obj), ...]
+    # Interpreter walking - returns [(addr, name, module_obj), ...]
     # ------------------------------------------------------------------
-    def parse_interpreters(self, interpreters_head_ptr, python_table_name):
+    def parse_interpreters(self, interpreter_head_addr, python_table_name):
         """
         Walk the PyInterpreterState linked list starting from interpreters.head.
 
@@ -161,20 +212,14 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
         modules = []
 
         # Dereference the interpreters.head pointer
-        try:
-            head_bytes = self.context.layers[self.process_layer].read(interpreters_head_ptr, 8)
-            head_addr = int.from_bytes(head_bytes, byteorder='little', signed=False)
-        except exceptions.InvalidAddressException:
-            head_addr = 0
-
-        if not head_addr:
+        if not interpreter_head_addr:
             print("No interpreters found or invalid pointer!")
             return modules
 
         current = self.context.object(
             object_type=python_table_name + constants.BANG + "PyInterpreterState",
             layer_name=self.process_layer,
-            offset=head_addr,
+            offset=interpreter_head_addr,
         )
 
         interpreter_count = 0
@@ -186,7 +231,11 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
 
             try:
                 # --- interpreter.modules (sys.modules) ---
-                modules_addr = current.modules
+                try:
+                    modules_addr = current.modules
+                except AttributeError:
+                    # 3.12+: modules moved into imports sub-struct
+                    modules_addr = current.imports.modules
                 if modules_addr and modules_addr != 0:
                     print(f"  modules dict at 0x{modules_addr:x}")
                     modules_dict_obj = self.context.object(
@@ -202,6 +251,8 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
                         if val_type != "module":
                             continue
                         mod_obj = mod_val.cast_to("PyModuleObject")
+                        mod_dict=mod_obj.get_dict2()
+                        print(mod_dict.keys())
                         addr = mod_obj.vol.offset
                         if addr not in seen_addrs:
                             seen_addrs.add(addr)
@@ -231,7 +282,7 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
 
 
     # ------------------------------------------------------------------
-    # Public API — called by main plugin
+    # Public API - called by main plugin
     # ------------------------------------------------------------------
 
     def get_modules(self, task, python_table_name):
@@ -253,7 +304,7 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
         # Resolve _PyRuntime
         py_runtime = self.find_py_runtime_address(task)
         if not py_runtime:
-            print("Could not find _PyRuntime — no interpreter modules available")
+            print("Could not find _PyRuntime - no interpreter modules available")
             return []
 
         # Compute interpreters.head address
@@ -262,12 +313,43 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
             print("Could not detect Python version")
             return []
 
-        offset = self.get_interpreters_head_offset(version, py_runtime)
-        interpreters_head = py_runtime + offset
-        print(f"_PyRuntime=0x{py_runtime:x}  +0x{offset:x}  --> interpreters.head at 0x{interpreters_head:x}")
+        interpreter_addr = self.get_interpreters_head_offset(version, py_runtime)
+        if not interpreter_addr:
+            print("Could not resolve interpreter head")
+            return []
+        print(f"_PyRuntime=0x{py_runtime:x}, interpreter_head=0x{interpreter_addr:x}")
 
-        return self.parse_interpreters(interpreters_head, python_table_name)
+        return self.parse_interpreters(interpreter_addr, python_table_name)
   
+    # ------------------------------------------------------------------
+    # Standalone execution
+    # ------------------------------------------------------------------
+    def _load_symbol_table(self, version):
+        """
+        Load the appropriate IntermedSymbols class for the detected version.
+        Returns the symbol table name, or None if no table is registered.
+        """
+        key = version[:2]
+        print(f"key: {key}")
+        entry = SYMBOL_TABLE_REGISTRY.get(key)
+        if not entry:
+            print(f"No symbol table registered for Python {key[0]}.{key[1]}")
+            print(f"  Available: {sorted(SYMBOL_TABLE_REGISTRY.keys())}")
+            print(f"  Add an entry to SYMBOL_TABLE_REGISTRY in py_gc.py")
+            return None
+
+        import_path, class_name, sub_path, filename = entry
+        module = __import__(import_path, fromlist=[class_name])
+        symbol_class = getattr(module, class_name)
+
+        python_table_name = symbol_class.create(
+            self.context, self.config_path,
+            sub_path=sub_path,
+            filename=filename,
+        )
+        print(f"Loaded symbol table: {class_name} → {python_table_name}")
+        return python_table_name
+    
     def _collect_data(self, tasks):
         """
         Entry point when running as a standalone plugin.
@@ -284,17 +366,9 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
             print("Could not detect Python version")
             return []
 
-        if version[:2] == (3, 8):
-            from volatility3.framework.symbols.generic.types.python.sbom_dep_graph import Python_3_8_18_IntermedSymbols
-            python_table_name = Python_3_8_18_IntermedSymbols.create(
-                self.context, self.config_path,
-                sub_path="generic/types/python",
-                filename="python38",
-            )
-        else:
-            print(f"Unsupported Python version: {version}")
+        python_table_name = self._load_symbol_table(version)
+        if not python_table_name:
             return []
-
         return self.get_modules(task, python_table_name)
 
     # ------------------------------------------------------------------
