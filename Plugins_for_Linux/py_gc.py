@@ -58,11 +58,12 @@ GC_314_PERMANENT_OFFSET = 0x60
 GC_314_VISITED_SPACE_OFFSET = 0xe8
 
 
-# 3.8 only: GC is global in _PyRuntime, not per-interpreter.
-# _PyRuntime + 0x170 lands directly on generations[0].
-PYRUNTIME_GC_GEN0_OFFSET_38 = 0x170
-
-
+# 3.7-3.8: GC is global in _PyRuntime, not per-interpreter.
+# Got with: p/x &((_PyRuntimeState*)0)->gc.generations
+PYRUNTIME_GC_GENERATIONS_OFFSET = {
+    (3, 7): 0x160,
+    (3, 8): 0x170,
+}
 # 3.9-3.12: GC is per-interpreter. These are the offsets of the gc field
 # inside PyInterpreterState. Got with: p/x &((PyInterpreterState*)0)->gc
 INTERP_GC_OFFSETS = {
@@ -91,6 +92,18 @@ DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 # SYMBOL TABLE REGISTRY - maps Python version to loader parameters
 # ==========================================================================
 SYMBOL_TABLE_REGISTRY = {
+    (3, 6): (
+        'volatility3.framework.symbols.generic.types.python.python36_handler',
+        'Python_3_6_15_IntermedSymbols',
+        'generic/types/python',
+        'python36',
+    ),
+    (3, 7): (
+        'volatility3.framework.symbols.generic.types.python.python37_handler',
+        'Python_3_7_17_IntermedSymbols',
+        'generic/types/python',
+        'python37',
+    ),
     (3, 8): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
         'Python_3_8_18_IntermedSymbols',
@@ -267,12 +280,12 @@ class Py_GC(interfaces.plugins.PluginInterface):
         """
         key = version[:2]
 
-        # 3.8: GC lives directly in _PyRuntime (global, not per-interpreter)
-        if key == (3, 8):
-            gc_base = py_runtime_addr + PYRUNTIME_GC_GEN0_OFFSET_38 - GC_GENERATIONS_OFFSET_IN_GC
-            print(f"Python 3.8: GC base in _PyRuntime at 0x{gc_base:x}")
-            return gc_base
-
+        # 3.7 & 3.8: GC lives directly in _PyRuntime (global, not per-interpreter)
+        if key in PYRUNTIME_GC_GENERATIONS_OFFSET:
+           gen_offset = PYRUNTIME_GC_GENERATIONS_OFFSET[key]
+           gc_base = py_runtime_addr + gen_offset - GC_GENERATIONS_OFFSET_IN_GC
+           print(f"Python {key[0]}.{key[1]}: GC base in _PyRuntime at 0x{gc_base:x}")
+           return gc_base
         # 3.13+: read gc offset from _Py_DebugOffsets dynamically
         if key >= (3, 13):
             debug_gc_pos = DEBUG_OFFSETS_GC_FIELD_POS.get(
@@ -510,10 +523,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
             - gc_base address for 3.14+ (incremental)
           or (None, None) on failure.
         """
-        py_runtime = self.find_py_runtime_address(task)
-        if not py_runtime:
-            print("Could not find _PyRuntime")
-            return None, None
+       
 
         version = self.detect_python_version(task)
         if not version:
@@ -522,11 +532,19 @@ class Py_GC(interfaces.plugins.PluginInterface):
 
         key = version[:2]
         print(f"Detected Python {key[0]}.{key[1]}")
+       
+        if key == (3, 6):
+           return self._resolve_gc_36(task, version)
 
+        # === Python 3.7+: use _PyRuntime ===
+        py_runtime = self.find_py_runtime_address(task)
+        if not py_runtime:
+           print("Could not find _PyRuntime")
+           return None, None
         # 3.8: no interpreter needed, GC is in _PyRuntime
         # 3.9+: need interpreter address
         interpreter_addr = None
-        if key != (3, 8):
+        if key not in PYRUNTIME_GC_GENERATIONS_OFFSET:
             interpreter_addr = self.get_interpreter_head_address(version, py_runtime)
             if not interpreter_addr:
                 print("Could not resolve interpreter head")
@@ -541,6 +559,56 @@ class Py_GC(interfaces.plugins.PluginInterface):
             gen0_addr = self.find_gc_generations_head(version, py_runtime, interpreter_addr)
             return gen0_addr, version
 
+    
+    def _resolve_gc_36(self, task, version):
+      """
+      Python 3.6 GC resolution.
+    
+      In 3.6 there is no _PyRuntime. The GC generations are accessed via
+      the global '_PyGC_generation0' which points directly to generations[0].head.
+      The 'generations' global is the array of 3 gc_generation structs.
+    
+      We resolve _PyGC_generation0 and dereference it to get gen0 head address.
+      The generations array is at _PyGC_generation0 value (since gen0 IS the
+      first element of the array).
+      """
+      try:
+        proc_layer_name = task.add_process_layer()
+      except exceptions.InvalidAddressException:
+        return None, None
+
+      resolved = elf_parsing.find_symbol_in_process(
+        self.context, proc_layer_name, task,
+        module_substring="libpython",
+        symbol_names=["_PyGC_generation0"],
+      )
+
+      gen0_ptr_addr = resolved.get("_PyGC_generation0")
+      if not gen0_ptr_addr:
+        print("ERROR: Could not resolve _PyGC_generation0")
+        return None, None
+
+      print(f"Resolved _PyGC_generation0 at: 0x{gen0_ptr_addr:x}")
+
+      # _PyGC_generation0 is a PyGC_Head* — it points to generations[0].head
+      # Read the pointer value
+      layer = self.context.layers[proc_layer_name]
+      gen0_bytes = layer.read(gen0_ptr_addr, 8)
+      gen0_addr = int.from_bytes(gen0_bytes, 'little')
+
+      if not gen0_addr:
+         print("ERROR: _PyGC_generation0 is NULL")
+         return None, None
+
+      print(f"generations[0].head at 0x{gen0_addr:x}")
+
+      # In 3.6, the generations array layout is the same as 3.8:
+      #   3 x gc_generation (each 24 bytes: PyGC_Head head[16] + threshold[4] + count[4])
+      # gen0_addr points to the head of generation 0
+      # gen1 = gen0_addr + 24, gen2 = gen0_addr + 48
+      return gen0_addr, version
+    
+    
     # ------------------------------------------------------------------
     # Public API - get_modules (for main plugin integration)
     # ------------------------------------------------------------------
@@ -575,7 +643,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
             try:
                 mod_obj = obj.cast_to("PyModuleObject")
                 mod_dict=mod_obj.get_dict2()
-                print(mod_dict.keys())
+                #print(mod_dict.keys())
                 mod_name = mod_obj.get_name()
                 modules.append((addr, str(mod_name), mod_obj))
             except Exception as e:

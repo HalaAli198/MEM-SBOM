@@ -7,7 +7,7 @@ import re
 #https://github.com/python/cpython/blob/main/Include/internal/pycore_runtime.h
 #https://github.com/python/cpython/blob/3.14/Include/internal/pycore_runtime_structs.h
 PYRUNTIME_INTERP_HEAD_OFFSETS = {
-    (3, 7):  0x10,   # PyRuntimeState.interpreters.head
+    (3, 7):  0x18,   # PyRuntimeState.interpreters.head
     (3, 8):  0x20,   # _PyRuntimeState.interpreters.head
     (3, 9):  0x20,
     (3, 10): 0x20,
@@ -20,6 +20,18 @@ DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 # SYMBOL TABLE REGISTRY - maps Python version to loader parameters
 # ==========================================================================
 SYMBOL_TABLE_REGISTRY = {
+    (3, 6): (
+        'volatility3.framework.symbols.generic.types.python.python36_handler',
+        'Python_3_6_15_IntermedSymbols',
+        'generic/types/python',
+        'python36',
+    ),
+    (3, 7): (
+        'volatility3.framework.symbols.generic.types.python.python37_handler',
+        'Python_3_7_17_IntermedSymbols',
+        'generic/types/python',
+        'python37',
+    ),
     (3, 8): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
         'Python_3_8_18_IntermedSymbols',
@@ -195,7 +207,34 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
         return head_addr
 
     
-    
+    def _resolve_interp_head_36(self, task, task_layer):
+      """
+      Python 3.6: no _PyRuntime. Resolve interpreter head by parsing
+      PyInterpreterState_Head() which is just: mov rax,[rip+disp32]; ret
+      """
+      resolved = elf_parsing.find_symbol_in_process(
+        self.context, task_layer, task,
+        module_substring="libpython",
+        symbol_names=["PyInterpreterState_Head"],
+      )
+      func_addr = resolved.get("PyInterpreterState_Head")
+      if not func_addr:
+        print("Could not resolve PyInterpreterState_Head")
+        return None
+
+      layer = self.context.layers[self.process_layer]
+      # Skip endbr64 (4 bytes), read mov rax,[rip+disp32] (7 bytes)
+      code = layer.read(func_addr + 4, 7)
+      if code[:3] != b'\x48\x8b\x05':
+        print(f"Unexpected instruction at PyInterpreterState_Head+4: {code[:3].hex()}")
+        return None
+
+      disp = int.from_bytes(code[3:7], 'little', signed=True)
+      interp_head_addr = func_addr + 11 + disp
+      head_bytes = layer.read(interp_head_addr, 8)
+      interpreter_addr = int.from_bytes(head_bytes, 'little')
+      print(f"Python 3.6: PyInterpreterState_Head -> interp_head at 0x{interp_head_addr:x} -> 0x{interpreter_addr:x}")
+      return interpreter_addr
     # ------------------------------------------------------------------
     # Interpreter walking - returns [(addr, name, module_obj), ...]
     # ------------------------------------------------------------------
@@ -301,16 +340,25 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
         task_layer = task.add_process_layer()
         self.process_layer = self.context.layers[task_layer].name
 
-        # Resolve _PyRuntime
-        py_runtime = self.find_py_runtime_address(task)
-        if not py_runtime:
-            print("Could not find _PyRuntime - no interpreter modules available")
-            return []
-
+       
         # Compute interpreters.head address
         version = self.detect_python_version(task)
         if not version:
             print("Could not detect Python version")
+            return []
+
+        key = version[:2]
+        # Python 3.6: no _PyRuntime, resolve interp_head directly
+        if key == (3, 6):
+           interpreter_addr = self._resolve_interp_head_36(task, task_layer)
+           if not interpreter_addr:
+              return []
+           return self.parse_interpreters(interpreter_addr, python_table_name)
+
+        # Python 3.7+: use _PyRuntime
+        py_runtime = self.find_py_runtime_address(task)
+        if not py_runtime:
+            print("Could not find _PyRuntime - no interpreter modules available")
             return []
 
         interpreter_addr = self.get_interpreters_head_offset(version, py_runtime)
