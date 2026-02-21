@@ -14,7 +14,7 @@ import io
 Py_TPFLAGS_HEAPTYPE = 1 << 9
 
 
-class Python_3_7_17_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_7_IntermedSymbols(intermed.IntermediateSymbolTable):
     """
     Python 3.7.17 has similar memory structures of python3.6.
     
@@ -1561,7 +1561,7 @@ class PyASCIIObject(PyObject):
         # But the actual offset depends on the ISF. Let's use relative offset 32 
         # since ob_base in the ISF might be different.
         # Reading from the struct offset for the state field
-        state_val = int.from_bytes(curr_layer.read(self.vol.offset + 48, 4), 'little')
+        state_val = int.from_bytes(curr_layer.read(self.vol.offset + 32, 4), 'little')
         COMPACT = (state_val >> 5) & 1
         ASCII = (state_val >> 6) & 1
         KIND = (state_val >> 2) & 0b111

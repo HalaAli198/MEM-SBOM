@@ -13,7 +13,7 @@ import sys
 from io import StringIO
 import io
 Py_TPFLAGS_HEAPTYPE = 1 << 9 
-class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_8_IntermedSymbols(intermed.IntermediateSymbolTable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -2052,7 +2052,7 @@ class PySetObject(PyObject):
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
 
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
         # Debug log
 
         
@@ -2118,6 +2118,8 @@ class PySetObject(PyObject):
             except TypeError as e:
                 print(f"TypeError creating set for PySetObject at {hex(self.vol.offset)}: {str(e)}. Returning set of str() representations of values.")
                 return set(str(val) for val in hashed_values)
+
+
 class PyFloatObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=5, visited=None):
        

@@ -295,7 +295,7 @@ def search_section_symbols(
             continue
 
         sh_type = int.from_bytes(sh_data[4:8], 'little')
-        if sh_type not in (2, 11): # Walk all section headers, looking for SHT_SYMTAB (2) and SHT_DYNSYM (11)
+        if sh_type not in (2, 11):
             continue
 
         if is_64:
@@ -310,15 +310,13 @@ def search_section_symbols(
             sh_entsize = int.from_bytes(sh_data[40:44], 'little')
 
         if sh_entsize == 0:
-            sh_entsize = 24 if is_64 else 16  # Default Elf64_Sym / Elf32_Sym size
+            sh_entsize = 24 if is_64 else 16
 
-        # The symbol table data itself also needs to be within a PT_LOAD
         symtab_vaddr = file_offset_to_vaddr(segments, sh_offset, is_pie, base_address)
         if symtab_vaddr is None:
             vollog.debug(f"Symbol table at file offset 0x{sh_offset:x} not mapped")
             continue
 
-        # sh_link points to the associated string table section
         strtab_hdr = _read_bytes(layer, shdr_vaddr + sh_link * e_shentsize, e_shentsize)
         if strtab_hdr is None:
             continue
@@ -335,7 +333,6 @@ def search_section_symbols(
             vollog.debug(f"String table at file offset 0x{strtab_file_offset:x} not mapped")
             continue
        
-        # Cap the read at 1MB to avoid blowing up on corrupt data
         strtab_data = _read_bytes(layer, strtab_vaddr, min(strtab_size, 1 << 20))
         if strtab_data is None:
             continue
@@ -344,7 +341,6 @@ def search_section_symbols(
         section_name = "SHT_SYMTAB" if sh_type == 2 else "SHT_DYNSYM"
         vollog.info(f"Scanning {section_name} at 0x{symtab_vaddr:x} ({num_symbols} symbols)")
         
-        # Linear scan through all symbol entries
         for j in range(num_symbols):
             sym_bytes = _read_bytes(layer, symtab_vaddr + j * sh_entsize, sh_entsize)
             if sym_bytes is None:
@@ -359,8 +355,6 @@ def search_section_symbols(
             else:
                 st_value = int.from_bytes(sym_bytes[4:8], 'little')
 
-            
-            # Extract the null-terminated symbol name from the string table
             null_pos = strtab_data.find(b'\x00', st_name_idx)
             if null_pos < 0:
                 null_pos = min(st_name_idx + 256, len(strtab_data))
@@ -572,13 +566,11 @@ def search_lto_symbols(
         lto_targets.add(lto_name)
         original_map[lto_name] = name
 
-    # Run the LTO names through the same resolution strategies
     lto_found = search_section_symbols(layer, base_address, elf_info, lto_targets, segments)
     remaining_lto = lto_targets - set(lto_found.keys())
     if remaining_lto:
         lto_found.update(search_dynamic_symbols(layer, base_address, elf_info, remaining_lto, segments))
     
-    # Map the LTO names back to the original names the caller asked for
     result = {}
     for lto_name, addr in lto_found.items():
         result[original_map.get(lto_name, lto_name)] = addr
@@ -609,7 +601,6 @@ def search_mapped_symtab(
     found = {}
     remaining = set(symbol_names)
     
-    # Also try LTO variants in the same scan
     lto_map = {}
     for name in symbol_names:
         lto_map[name + ".lto_priv"] = name
@@ -617,39 +608,30 @@ def search_mapped_symtab(
 
     is_64  = elf_info["is_64"]
     is_pie = elf_info["is_pie"]
-    sym_size = 24 if is_64 else 16 # sizeof(Elf64_Sym) or Elf32_Sym
+    sym_size = 24 if is_64 else 16
 
-    # Collect readable PT_LOAD segments — .symtab data lives in read-only segments
     readable_segments = []
     for seg in segments:
-        if seg["type"] != 1:  # PT_LOAD only
+        if seg["type"] != 1:
             continue
-        # .symtab is typically in a read-only segment (not executable)
-        # Flags: PF_R=4, PF_W=2, PF_X=1
         if seg["filesz"] > 0:
             seg_vaddr = _resolve_addr(base_address, seg["vaddr"], is_pie)
             readable_segments.append((seg_vaddr, seg["filesz"], seg["flags"]))
 
-    # Phase 1: Find our target symbol names as literal strings in the data segments.
-    # This locates candidate .strtab regions.
     strtab_candidates = []
     for seg_vaddr, seg_size, seg_flags in readable_segments:
-        # .symtab/.strtab are in data segments, not code — skip executable ones
         if seg_flags & 1:  # PF_X
             continue
        
         if seg_size < 1024:
             continue
 
-        
         chunk_size = min(seg_size, 0x200000)
         data = _read_bytes(layer, seg_vaddr, chunk_size)
         if data is None:
             continue
 
-       
         for target in all_targets:
-            # Symbol names in .strtab are null-terminated
             target_bytes = target.encode('ascii') + b'\x00'
             pos = 0
             while True:
@@ -657,12 +639,8 @@ def search_mapped_symtab(
                 if idx < 0:
                     break
 
-                # Found the string. Now walk backwards to find where .strtab begins.
-                # ELF string tables always start with a \x00 byte and contain only
-                # printable ASCII separated by nulls.
                 strtab_start_idx = idx
                 while strtab_start_idx > 0 and strtab_start_idx > idx - 0x100000:
-                  
                     if data[strtab_start_idx] == 0 and strtab_start_idx > 0:
                         strtab_start_idx -= 1
                         continue
@@ -673,7 +651,6 @@ def search_mapped_symtab(
                         strtab_start_idx += 1
                         break
 
-                # Align to the first null byte (strtab convention)
                 while strtab_start_idx < idx and data[strtab_start_idx] != 0:
                     strtab_start_idx += 1
 
@@ -693,10 +670,6 @@ def search_mapped_symtab(
     if not strtab_candidates:
         return found
 
-    # Phase 2: For each candidate strtab location, search the memory BEFORE it
-    # for Elf64_Sym entries. The .symtab section is typically placed just before
-    # .strtab in the ELF layout, so we scan backwards looking for an entry whose
-    # st_name field equals our computed offset.
     for candidate in strtab_candidates:
         target = candidate["target"]
         name_offset = candidate["name_offset"]
@@ -704,7 +677,6 @@ def search_mapped_symtab(
         seg_vaddr = candidate["seg_vaddr"]
         seg_size = candidate["seg_size"]
 
-        
         search_start = seg_vaddr
         search_end = strtab_vaddr
         search_size = search_end - search_start
@@ -716,15 +688,12 @@ def search_mapped_symtab(
         if sym_data is None:
             continue
 
-        # Look for an Elf64_Sym entry where st_name matches our offset
         name_offset_bytes = name_offset.to_bytes(4, 'little')
 
         for offset in range(0, len(sym_data) - sym_size, sym_size):
-            # Check if st_name field matches
             if sym_data[offset:offset + 4] != name_offset_bytes:
                 continue
 
-            # Potential match — validate the rest of the Elf64_Sym fields
             if is_64:
                 st_info  = sym_data[offset + 4]
                 st_value = int.from_bytes(sym_data[offset + 8:offset + 16], 'little')
@@ -737,13 +706,10 @@ def search_mapped_symtab(
             st_bind = st_info >> 4
             st_type = st_info & 0xf
 
-            # Basic sanity: binding should be LOCAL/GLOBAL/WEAK)
             if st_bind > 2:
                 continue
-            # Type should be NOTYPE/OBJECT/FUNC/SECTION/FILE
             if st_type > 4:
                 continue
-            # For non-PIE, addresses should be in the expected range
             if st_value == 0:
                 continue
             if not is_pie and (st_value < 0x400000 or st_value > 0xffffffff):
@@ -751,11 +717,9 @@ def search_mapped_symtab(
 
             resolved = _resolve_addr(base_address, st_value, is_pie)
 
-            # Final check: the resolved address should be readable
             if _read_bytes(layer, resolved, 8) is None:
                 continue
 
-            # Map LTO name back to original
             orig_name = lto_map.get(target, target)
             found[orig_name] = resolved
             remaining.discard(orig_name)
@@ -764,9 +728,228 @@ def search_mapped_symtab(
             if not remaining and not (set(lto_map.keys()) - set(found.keys())):
                 return found
 
-            break  # Move to next candidate
+            break
 
     return found
+
+
+# ---------------------------------------------------------------------------
+# Arena validation helpers
+# ---------------------------------------------------------------------------
+
+def _validate_single_arena_object(layer, arena_obj_addr: int) -> bool:
+    """
+    Validate that a 48-byte region looks like a valid arena_object.
+
+    CPython arena_object layout (64-bit):
+      +0x00  address        (8 bytes) — mmap'd base, 256KB-aligned
+      +0x08  pool_address   (8 bytes) — next pool to carve, > address
+      +0x10  nfreepools     (4 bytes) — 0..ntotalpools
+      +0x14  ntotalpools    (4 bytes) — always <= 64 (256KB / 4KB)
+      +0x18  freepools      (8 bytes) — pointer to pool_header or NULL
+      +0x20  nextarena      (8 bytes) — linked list pointer or NULL
+      +0x28  prevarena      (8 bytes) — linked list pointer or NULL
+    """
+    data = _read_bytes(layer, arena_obj_addr, 48)
+    if data is None:
+        return False
+
+    arena_addr  = int.from_bytes(data[0:8], 'little')
+    pool_addr   = int.from_bytes(data[8:16], 'little')
+    nfreepools  = int.from_bytes(data[16:20], 'little')
+    ntotalpools = int.from_bytes(data[20:24], 'little')
+
+    # Unused slot (address == 0) is structurally valid but not "active"
+    if arena_addr == 0:
+        return False
+
+    # ntotalpools: 256KB arena / 4KB pool = 64 max
+    if ntotalpools == 0 or ntotalpools > 64:
+        return False
+
+    # nfreepools must be <= ntotalpools
+    if nfreepools > ntotalpools:
+        return False
+
+    # pool_address must be > address (pools start after alignment padding)
+    if pool_addr <= arena_addr:
+        return False
+
+    # gap between address and pool_address should be < 256KB
+    if (pool_addr - arena_addr) > 0x40000:
+        return False
+
+    # address should be 256KB-aligned (mmap guarantee) or at least page-aligned
+    if arena_addr & 0xFFF:
+        return False
+
+    # The mmap'd region should be readable
+    if _read_bytes(layer, arena_addr, 8) is None:
+        return False
+
+    return True
+
+
+def _validate_arenas_pointer(layer, candidate_addr: int) -> bool:
+    """
+    Validate that candidate_addr holds a pointer to the BASE of the
+    arena_object array (not usable_arenas which points into the middle).
+    
+    The real 'arenas' pointer points to a contiguous array of arena_objects.
+    We verify:
+      1. The pointer dereferences to readable memory
+      2. At least 3 of the first 5 slots look like valid arena_objects
+         (some may be unused with address=0, but the pattern should be consistent)
+      3. Consecutive valid entries have distinct, non-overlapping arena addresses
+    """
+    try:
+        ptr_bytes = _read_bytes(layer, candidate_addr, 8)
+        if ptr_bytes is None:
+            return False
+        ptr_val = int.from_bytes(ptr_bytes, 'little')
+        
+        if ptr_val < 0x10000 or ptr_val > 0x7fffffffffff:
+            return False
+
+        # The arenas array is heap-allocated (realloc), so the pointer
+        # must be 16-byte aligned on 64-bit glibc
+        if ptr_val & 0xF:
+            return False
+
+        # Read first 5 arena_objects (48 bytes each = 240 bytes)
+        array_data = _read_bytes(layer, ptr_val, 240)
+        if array_data is None:
+            return False
+
+        valid_count = 0
+        seen_addresses = set()
+        for i in range(5):
+            off = i * 48
+            arena_addr  = int.from_bytes(array_data[off:off+8], 'little')
+            pool_addr   = int.from_bytes(array_data[off+8:off+16], 'little')
+            nfreepools  = int.from_bytes(array_data[off+16:off+20], 'little')
+            ntotalpools = int.from_bytes(array_data[off+20:off+24], 'little')
+
+            if arena_addr == 0:
+                continue  # unused slot, ok
+
+            if not (0 < ntotalpools <= 64):
+                return False
+            if nfreepools > ntotalpools:
+                return False
+            if pool_addr <= arena_addr:
+                return False
+            if (pool_addr - arena_addr) > 0x40000:
+                return False
+            if arena_addr & 0xFFF:
+                return False
+            if _read_bytes(layer, arena_addr, 8) is None:
+                return False
+            # Each arena should map a different region
+            if arena_addr in seen_addresses:
+                return False
+            seen_addresses.add(arena_addr)
+            valid_count += 1
+
+        # The real arenas array should have at least 3 valid entries
+        # at the start. usable_arenas typically points into the middle
+        # of the same array at a different offset.
+        return valid_count >= 3
+
+    except Exception:
+        return False
+
+
+def _count_valid_arenas_from_ptr(layer, array_base: int, max_check: int = 64) -> int:
+    """
+    Count how many arena_objects exist in the array starting at array_base.
+    Returns the total array size (including unused slots with address=0).
+
+    Each entry is validated strictly:
+      - address must be 0 (unused) or page-aligned with readable memory
+      - ntotalpools must be 0 (unused) or in [1, 64]
+      - nfreepools <= ntotalpools
+      - pool_address > address for active entries
+      - Active entries must have distinct arena addresses
+
+    Stops at:
+      - 3+ consecutive entries that are neither valid active nor valid empty
+      - Unreadable memory
+    """
+    count = 0
+    active_count = 0
+    consecutive_invalid = 0
+    seen_addresses = set()
+
+    for i in range(max_check):
+        data = _read_bytes(layer, array_base + i * 48, 48)
+        if data is None:
+            break
+
+        arena_addr  = int.from_bytes(data[0:8], 'little')
+        pool_addr   = int.from_bytes(data[8:16], 'little')
+        nfreepools  = int.from_bytes(data[16:20], 'little')
+        ntotalpools = int.from_bytes(data[20:24], 'little')
+
+        if arena_addr == 0:
+            # Unused/free slot — valid structurally
+            # For a truly unused slot, ntotalpools should also be 0
+            # But CPython keeps ntotalpools set after dealloc, so just
+            # check that pool/nfreepools are reasonable
+            consecutive_invalid = 0
+            count = i + 1
+            continue
+
+        # Active entry — full validation
+        if ntotalpools == 0 or ntotalpools > 64:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        if nfreepools > ntotalpools:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        if pool_addr <= arena_addr:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        if (pool_addr - arena_addr) > 0x40000:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        if arena_addr & 0xFFF:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        if arena_addr in seen_addresses:
+            consecutive_invalid += 1
+            if consecutive_invalid >= 3:
+                break
+            count = i + 1
+            continue
+
+        # Passed all checks
+        seen_addresses.add(arena_addr)
+        consecutive_invalid = 0
+        active_count += 1
+        count = i + 1
+
+    return active_count
 
 
 # ---------------------------------------------------------------------------
@@ -783,44 +966,58 @@ def search_mapped_symtab(
 #   - pool_address: address + some offset into the arena
 #   - ntotalpools: always <= 64 (256KB / 4KB)
 #   - pool_address > address (pool region starts after arena base)
+#
+# CPython's obmalloc.c declares these globals in close proximity:
+#   static unsigned int maxarenas = INITIAL_ARENA_OBJECTS;   // 4 bytes (+ padding)
+#   static struct arena_object* arenas = NULL;               // 8 bytes
+#   static struct arena_object* usable_arenas = NULL;        // 8 bytes
+#   static struct arena_object* unused_arena_objects = NULL;  // 8 bytes
+#
+# The exact layout depends on compiler/version, but we can exploit the
+# cluster pattern: arenas and usable_arenas both point into the same
+# heap-allocated array (usable_arenas points to the first arena with
+# free pools, arenas points to index 0). maxarenas is a small uint
+# (typically 16-1024) located within a cache line of arenas.
+#
+# Our approach:
+#   1. Find ALL pointers in writable Python regions that dereference to
+#      valid arena_object arrays
+#   2. Group candidates that point into the same array (within 48*1024 bytes
+#      of each other)
+#   3. The 'arenas' pointer is the one pointing to the lowest address in
+#      each group (index 0 of the array)
+#   4. Find 'maxarenas' by looking for a uint32 near the arenas pointer
+#      whose value equals or exceeds the observed array size
 # ---------------------------------------------------------------------------
 
-def scan_bss_for_arenas(
-    layer, base_address: int, elf_info: Dict,
-    task, context, proc_layer_name: str,
-) -> Dict[str, int]:
+def _collect_python_rw_regions(layer, task, context) -> List[Tuple[int, int, str]]:
     """
-    Find the arenas pointer by scanning writable segments for a pointer
-    that dereferences to a valid arena_object array.
+    Collect writable memory regions belonging to the Python binary or libpython.
+    Also includes adjacent anonymous mappings which typically hold .bss data.
     """
-    found = {}
-
-    # Collect writable VMAs that belong to the Python binary.
-    # The arenas global lives in .data or .bss, which are always writable.
     python_rw_regions = []
+    all_vmas = []
+
     for vma in task.mm.get_vma_iter():
+        vm_start = int(vma.vm_start)
+        vm_end = int(vma.vm_end)
+        all_vmas.append((vm_start, vm_end, vma))
+
         try:
             path = vma.get_name(context, task)
         except Exception:
             continue
-
         path_str = str(path) if path else ""
-        vm_start = int(vma.vm_start)
-        vm_end = int(vma.vm_end)
+        if "python" not in path_str.lower():
+            continue
+        if "/bin/" not in path_str and "libpython" not in path_str.lower():
+            continue
+        flags = vma.get_protection()
+        if 'w' in flags:
+            python_rw_regions.append((vm_start, vm_end, path_str))
 
-        if "python" in path_str.lower() and ("/bin/" in path_str or "libpython" in path_str.lower()):
-            flags = vma.get_protection()
-            if 'w' in flags:
-                python_rw_regions.append((vm_start, vm_end, path_str))
-
-    
-    # .bss can overflow into an adjacent anonymous mapping (the kernel extends
-    # the data segment with an anonymous page when .bss is larger than what
-    # fits in the file-backed page). Include those too.
-    all_vmas = []
-    for vma in task.mm.get_vma_iter():
-        all_vmas.append((int(vma.vm_start), int(vma.vm_end), vma))
-
+    # Include anonymous VMAs adjacent to Python's writable regions (.bss)
+    python_rw_ends = {end for _, end, _ in python_rw_regions}
     for vma_start, vma_end, vma in all_vmas:
         try:
             path = vma.get_name(context, task)
@@ -828,12 +1025,41 @@ def scan_bss_for_arenas(
             path = None
         if path and "Anonymous" not in str(path):
             continue
-        for rw_start, rw_end, _ in list(python_rw_regions):
-            if vma_start == rw_end:
-                python_rw_regions.append((vma_start, vma_end, "anonymous(.bss)"))
-                break
+        if vma_start in python_rw_ends:
+            python_rw_regions.append((vma_start, vma_end, "anonymous(.bss)"))
+            python_rw_ends.add(vma_end)  # chain adjacent anonymous regions
 
-    # Scan every 8-byte-aligned pointer in the writable regions
+    return python_rw_regions
+
+
+def scan_bss_for_arenas(
+    layer, base_address: int, elf_info: Dict,
+    task, context, proc_layer_name: str,
+) -> Dict[str, int]:
+    """
+    Find obmalloc globals (arenas, maxarenas, usable_arenas) by structural
+    scanning of writable Python memory regions.
+
+    Strategy:
+      Phase 1 — Find all pointers that dereference to valid arena_object arrays.
+      Phase 2 — Group candidates pointing to the same underlying array.
+      Phase 3 — In each group, pick the pointer to index 0 as 'arenas'.
+      Phase 4 — Find 'maxarenas' near 'arenas' using structural constraints.
+      Phase 5 — Find 'usable_arenas' as the other pointer in the same group.
+    """
+    found = {}
+
+    python_rw_regions = _collect_python_rw_regions(layer, task, context)
+    if not python_rw_regions:
+        print("  [bss_scan] No writable Python regions found")
+        return found
+
+    # -----------------------------------------------------------------------
+    # Phase 1: Find all pointers to valid arena_object arrays
+    # -----------------------------------------------------------------------
+    # A candidate is a (bss_addr, ptr_val) where ptr_val -> arena_object array
+    candidates = []
+
     for region_start, region_end, region_path in python_rw_regions:
         scan_size = min(region_end - region_start, 0x100000)
 
@@ -842,75 +1068,269 @@ def scan_bss_for_arenas(
             try:
                 ptr_bytes = layer.read(addr, 8, pad=False)
                 ptr_val = int.from_bytes(ptr_bytes, 'little')
-                
-                # Quick filter: must be a plausible userspace pointer
+
                 if ptr_val < 0x10000 or ptr_val > 0x7fffffffffff:
                     continue
 
-                # Try to read the first arena_object (48 bytes) from where this pointer leads
-                arena_data = _read_bytes(layer, ptr_val, 48)
+                # CRITICAL: The arenas array is heap-allocated via realloc().
+                # glibc malloc returns 16-byte aligned pointers on 64-bit.
+                # Any pointer not aligned to at least 8 bytes is NOT a valid
+                # malloc'd array base and must be rejected immediately.
+                if ptr_val & 0xF:
+                    continue
+
+                # Quick check: does ptr_val point to something that looks
+                # like an arena_object?  Read entries [0] and [1].
+                arena_data = _read_bytes(layer, ptr_val, 96)
                 if arena_data is None:
                     continue
 
-                # Parse the arena_object fields and validate them
                 arena_addr  = int.from_bytes(arena_data[0:8], 'little')
                 pool_addr   = int.from_bytes(arena_data[8:16], 'little')
                 nfreepools  = int.from_bytes(arena_data[16:20], 'little')
                 ntotalpools = int.from_bytes(arena_data[20:24], 'little')
 
+                # Validate entry[0]
+                entry0_valid = False
                 if arena_addr == 0:
-                    continue
-               
-                # CPython arenas are 256KB = 64 pools of 4KB each
-                if not (0 < ntotalpools <= 64):
-                    continue
-                
-                # pool_address is always above arena address
-                if pool_addr <= arena_addr:
-                    continue
-               
-                # pool_address is always above arena address
-                if (pool_addr - arena_addr) > 0x80000:
-                    continue
-                
-                # The arena memory itself should be readable
-                if _read_bytes(layer, arena_addr, 8) is None:
-                    continue
-
-                # Cross-check: the second arena_object in the array should also be
-                # valid (or zeroed out if unused)
-                arena2_data = _read_bytes(layer, ptr_val + 48, 48)
-                if arena2_data is not None:
-                    arena2_addr = int.from_bytes(arena2_data[0:8], 'little')
-                    ntotal2 = int.from_bytes(arena2_data[20:24], 'little')
-                    # Second entry should also be valid or zero (unused)
-                    if arena2_addr != 0 and (ntotal2 == 0 or ntotal2 > 64):
+                    # Unused slot — need entry[1] to be valid
+                    pass
+                else:
+                    if ntotalpools == 0 or ntotalpools > 64:
                         continue
-
-                found["arenas"] = addr
-                vollog.info(f"[bss_scan] Found arenas at 0x{addr:x} -> 0x{ptr_val:x}")
-
-                # maxarenas is typically within 32 bytes of arenas in .bss.
-                # It's a 4-byte integer that should be >= ntotalpools and reasonably small.
-                for delta in range(-32, 33, 8):
-                    if delta == 0:
+                    if nfreepools > ntotalpools:
                         continue
-                    candidate = addr + delta
-                    try:
-                        val = int.from_bytes(layer.read(candidate, 4, pad=False), 'little')
-                        if val >= ntotalpools and 0 < val <= 4096:
-                            found["maxarenas"] = candidate
-                            vollog.info(f"[bss_scan] Found maxarenas at 0x{candidate:x} = {val}")
-                            break
-                    except Exception:
+                    if pool_addr <= arena_addr:
                         continue
+                    if (pool_addr - arena_addr) > 0x40000:
+                        continue
+                    # address must be page-aligned (mmap guarantee)
+                    if arena_addr & 0xFFF:
+                        continue
+                    if _read_bytes(layer, arena_addr, 8) is None:
+                        continue
+                    entry0_valid = True
 
-                return found
+                # Validate entry[1]
+                arena2_addr  = int.from_bytes(arena_data[48:56], 'little')
+                pool2_addr   = int.from_bytes(arena_data[56:64], 'little')
+                nfree2       = int.from_bytes(arena_data[64:68], 'little')
+                ntotal2      = int.from_bytes(arena_data[68:72], 'little')
+
+                entry1_valid = False
+                if arena2_addr == 0:
+                    pass  # unused slot
+                elif (0 < ntotal2 <= 64 and nfree2 <= ntotal2
+                      and pool2_addr > arena2_addr
+                      and (pool2_addr - arena2_addr) <= 0x40000
+                      and (arena2_addr & 0xFFF) == 0):
+                    if _read_bytes(layer, arena2_addr, 8) is not None:
+                        entry1_valid = True
+
+                # Require at least one of [0],[1] to be a valid active arena
+                if not entry0_valid and not entry1_valid:
+                    continue
+
+                # If entry[1] has a non-zero address but fails validation, reject
+                if arena2_addr != 0 and not entry1_valid:
+                    continue
+
+                candidates.append((addr, ptr_val))
+                print(f"  [bss_scan] candidate: 0x{addr:x} -> 0x{ptr_val:x}")
 
             except Exception:
                 continue
 
+    if not candidates:
+        print("  [bss_scan] No candidates found")
+        return found
+
+    # -----------------------------------------------------------------------
+    # Phase 2: Group candidates by the array they point into
+    # -----------------------------------------------------------------------
+    # Two pointers reference the same array if they're within
+    # MAX_ARENAS * 48 bytes of each other (both point into the same
+    # heap allocation). We sort by ptr_val and group.
+    MAX_ARRAY_SPAN = 4096 * 48  # 192KB, way more than needed
+
+    candidates.sort(key=lambda c: c[1])
+
+    groups = []  # list of lists of (bss_addr, ptr_val)
+    current_group = [candidates[0]]
+
+    for i in range(1, len(candidates)):
+        bss_addr, ptr_val = candidates[i]
+        _, group_base = current_group[0]
+
+        if ptr_val - group_base < MAX_ARRAY_SPAN:
+            current_group.append(candidates[i])
+        else:
+            groups.append(current_group)
+            current_group = [candidates[i]]
+
+    groups.append(current_group)
+
+    print(f"  [bss_scan] Found {len(groups)} candidate group(s)")
+    for gi, group in enumerate(groups):
+        print(f"    Group {gi}: {len(group)} pointer(s)")
+        for bss_addr, ptr_val in group:
+            print(f"      0x{bss_addr:x} -> 0x{ptr_val:x}")
+
+    # -----------------------------------------------------------------------
+    # Phase 3: Select the best group and identify 'arenas'
+    # -----------------------------------------------------------------------
+    # Score each group. The real arenas group should have:
+    #   - Multiple pointers (arenas + usable_arenas at minimum)
+    #   - The base pointer pointing to the array start (lowest ptr_val)
+    #   - Multiple active (non-zero address) arena_objects
+    #   - Pointers that are properly aligned (heap allocation = 16-byte aligned)
+    #   - Pointers in the same BSS neighborhood (within a few cache lines of each other)
+
+    best_group = None
+    best_score = -1
+
+    for group in groups:
+        # The base pointer (arenas) is the one with the lowest ptr_val
+        base_bss, base_ptr = group[0]  # already sorted by ptr_val
+
+        # Count strictly validated active arenas
+        active = _count_valid_arenas_from_ptr(layer, base_ptr, max_check=128)
+
+        # Score components:
+        score = 0
+
+        # Must have at least 2 active arenas to be considered
+        if active < 2:
+            print(f"    Group scoring: base=0x{base_ptr:x} active={active} -> SKIP (too few)")
+            continue
+
+        # Active arena count (primary signal)
+        score += active * 10
+
+        # Groups with 2+ BSS pointers are strongly preferred
+        # (arenas + usable_arenas should both exist)
+        if len(group) >= 2:
+            score += 50
+            # Check if the other pointers are at valid offsets into the array
+            # (must be at multiples of 48 bytes from the base)
+            for _, other_ptr in group[1:]:
+                offset = other_ptr - base_ptr
+                if offset >= 0 and offset % 48 == 0:
+                    score += 20  # aligned into the array
+
+        # BSS pointer proximity: all pointers should be within ~64 bytes
+        # of each other in the BSS (obmalloc globals are adjacent)
+        bss_addrs = [bss for bss, _ in group]
+        bss_span = max(bss_addrs) - min(bss_addrs)
+        if bss_span <= 64:
+            score += 30
+        elif bss_span <= 256:
+            score += 10
+
+        print(f"    Group scoring: base=0x{base_ptr:x} active={active} "
+              f"ptrs={len(group)} bss_span={bss_span} score={score}")
+
+        if score > best_score:
+            best_score = score
+            best_group = group
+
+    if best_group is None:
+        print("  [bss_scan] No valid candidate group found")
+        return found
+
+    arenas_bss_addr, arenas_ptr_val = best_group[0]
+    found["arenas"] = arenas_bss_addr
+    active_arenas = _count_valid_arenas_from_ptr(layer, arenas_ptr_val, max_check=128)
+    print(f"  [bss_scan] Selected arenas: 0x{arenas_bss_addr:x} -> 0x{arenas_ptr_val:x} "
+          f"({active_arenas} active arenas, {len(best_group)} pointers in group, score={best_score})")
+
+    # -----------------------------------------------------------------------
+    # Phase 4: Find 'maxarenas' near 'arenas'
+    # -----------------------------------------------------------------------
+    # maxarenas is a uint32 that represents the allocated capacity of the
+    # arena_object array. Constraints:
+    #   - Located within 64 bytes of arenas (same cache line / struct region)
+    #   - Value is a uint32 (not a pointer — upper 4 bytes should be 0)
+    #   - Value >= number of observed valid arenas (it's the capacity)
+    #   - Value is a power-of-2 multiple of INITIAL_ARENA_OBJECTS (16),
+    #     because CPython doubles the array: 16, 32, 64, 128, ...
+    #     OR at least >= observed count and <= 4096
+    #   - The 4 bytes immediately following it should NOT look like the
+    #     upper half of a pointer (to distinguish from a misaligned pointer read)
+
+    observed_count = active_arenas
+    print(f"  [bss_scan] Observed arena count for maxarenas search: {observed_count}")
+
+    # Valid maxarenas values: must be >= observed arenas and a reasonable capacity
+    # CPython doubles: 16 -> 32 -> 64 -> 128 -> 256 -> ...
+    def _is_valid_maxarenas(val, observed):
+        if val < observed:
+            return False
+        if val > 4096:
+            return False
+        # Check if it's a power-of-2 multiple of 16 (CPython's growth pattern)
+        # 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+        if val >= 16:
+            v = val
+            while v > 16:
+                if v % 2 != 0:
+                    return False
+                v //= 2
+            return v == 16
+        # Small initial values (shouldn't happen in practice)
+        return val >= observed
+
+    maxarenas_candidates = []  # list of (addr, value, distance)
+
+    # Scan a wider range: [-64, +64] bytes around arenas, reading as uint32
+    # We read every 4-byte aligned position (maxarenas is uint32, may be at
+    # any 4-byte boundary)
+    SEARCH_RANGE = 64
+    for delta in range(-SEARCH_RANGE, SEARCH_RANGE + 4, 4):
+        candidate_addr = arenas_bss_addr + delta
+        try:
+            raw = layer.read(candidate_addr, 8, pad=False)
+            val_32 = int.from_bytes(raw[0:4], 'little')
+            upper_32 = int.from_bytes(raw[4:8], 'little')
+
+            # Skip if this looks like part of a pointer (upper 4 bytes non-zero
+            # in a way consistent with a userspace address)
+            if upper_32 != 0 and (upper_32 & 0xFFFF0000) in (0x7fff0000, 0x7f000000, 0x55550000, 0x55710000):
+                continue
+
+            if _is_valid_maxarenas(val_32, observed_count):
+                maxarenas_candidates.append((candidate_addr, val_32, abs(delta)))
+                print(f"    maxarenas candidate: 0x{candidate_addr:x} = {val_32} (delta={delta:+d})")
+
+        except Exception:
+            continue
+
+    if maxarenas_candidates:
+        # Prefer: closest to arenas, then exact power-of-2-of-16
+        maxarenas_candidates.sort(key=lambda c: (c[2], c[1]))
+        best_ma_addr, best_ma_val, best_ma_dist = maxarenas_candidates[0]
+        found["maxarenas"] = best_ma_addr
+        print(f"  [bss_scan] Selected maxarenas: 0x{best_ma_addr:x} = {best_ma_val} "
+              f"(delta={best_ma_dist})")
+    else:
+        print(f"  [bss_scan] WARNING: Could not find maxarenas")
+
+    # -----------------------------------------------------------------------
+    # Phase 5: Identify 'usable_arenas' from the group
+    # -----------------------------------------------------------------------
+    if len(best_group) > 1:
+        for bss_addr, ptr_val in best_group[1:]:
+            # usable_arenas points into the same array but at a different offset
+            offset_in_array = ptr_val - arenas_ptr_val
+            if offset_in_array >= 0 and offset_in_array % 48 == 0:
+                found["usable_arenas"] = bss_addr
+                arena_index = offset_in_array // 48
+                print(f"  [bss_scan] Found usable_arenas: 0x{bss_addr:x} -> 0x{ptr_val:x} "
+                      f"(arena index {arena_index})")
+                break
+
     return found
+
 
 def scan_bss_for_pyruntime(
     layer, base_address: int, elf_info: Dict,
@@ -931,47 +1351,10 @@ def scan_bss_for_pyruntime(
     """
     found = {}
 
-    # Collect writable VMAs belonging to the Python binary OR libpython
-    python_rw_regions = []
-    for vma in task.mm.get_vma_iter():
-        try:
-            path = vma.get_name(context, task)
-        except Exception:
-            continue
-        path_str = str(path) if path else ""
-        if "python" not in path_str.lower():
-            continue
-        if "/bin/" not in path_str and "libpython" not in path_str.lower():
-            continue
-        flags = vma.get_protection()
-        if 'w' not in flags:
-            continue
-        python_rw_regions.append((int(vma.vm_start), int(vma.vm_end), path_str))
+    python_rw_regions = _collect_python_rw_regions(layer, task, context)
+    if not python_rw_regions:
+        return found
 
-    # Also include adjacent anonymous mappings (.bss overflow)
-    all_vmas = []
-    for vma in task.mm.get_vma_iter():
-        all_vmas.append((int(vma.vm_start), int(vma.vm_end), vma))
-
-    for vma_start, vma_end, vma in all_vmas:
-        try:
-            path = vma.get_name(context, task)
-        except Exception:
-            path = None
-        if path and "Anonymous" not in str(path):
-            continue
-        for rw_start, rw_end, _ in list(python_rw_regions):
-            if vma_start == rw_end:
-                python_rw_regions.append((vma_start, vma_end, "anonymous(.bss)"))
-                break
-
-    # Cover all known CPython versions (3.7 through 3.13+).
-    # The interpreters sub-struct offset within _PyRuntimeState grows
-    # as new fields are added in each version:
-    #   3.7-3.8:  0x10-0x20
-    #   3.9-3.10: 0x20-0x50
-    #   3.11-3.12: 0x28-0x60
-    #   3.13+:     0x40-0x100+
     candidate_interp_offsets = list(range(0x10, 0x120, 0x8))
 
     for region_start, region_end, region_path in python_rw_regions:
@@ -986,7 +1369,6 @@ def scan_bss_for_pyruntime(
                 continue
 
             for offset in range(0, scan_size - interp_offset - 24, 8):
-                # Read the three fields: head, main, next_id
                 head_ptr = int.from_bytes(
                     data[offset + interp_offset:offset + interp_offset + 8], 'little'
                 )
@@ -996,7 +1378,6 @@ def scan_bss_for_pyruntime(
                 main_ptr = int.from_bytes(
                     data[offset + interp_offset + 8:offset + interp_offset + 16], 'little'
                 )
-                # Single interpreter: head == main
                 if head_ptr != main_ptr:
                     continue
 
@@ -1006,16 +1387,12 @@ def scan_bss_for_pyruntime(
                 if next_id != 1:
                     continue
 
-                # Validate that head_ptr points to readable, non-zero memory
                 test = _read_bytes(layer, head_ptr, 16)
                 if test is None or all(b == 0 for b in test):
                     continue
 
                 candidate_addr = region_start + offset
 
-                # Validate the PyInterpreterState that head_ptr points to.
-                # The main interpreter always has id == 0. Check several
-                # possible offsets for the id field across versions.
                 interp_looks_valid = False
                 for id_offset in (0x10, 0x18, 0x20, 0x28, 0x30, 0x38):
                     interp_id_val = _read_int(layer, head_ptr + id_offset, 8)
@@ -1029,7 +1406,6 @@ def scan_bss_for_pyruntime(
                 if not interp_looks_valid:
                     continue
 
-                # Reject false positives from zeroed memory
                 if offset + interp_offset + 48 <= len(data):
                     tail = data[offset + interp_offset + 24:offset + interp_offset + 48]
                     if all(b == 0 for b in tail):
@@ -1043,6 +1419,8 @@ def scan_bss_for_pyruntime(
                 return found
 
     return found
+
+
 # ---------------------------------------------------------------------------
 # Master resolution — runs all strategies in order of reliability
 # ---------------------------------------------------------------------------
@@ -1064,50 +1442,182 @@ def resolve_symbols(
         vollog.warning(f"Invalid ELF at 0x{base_address:x}")
         return found
 
-
     segments = parse_load_segments(layer, base_address, elf_info)
     print(f"Found {len(segments)} program headers, "
                 f"{sum(1 for s in segments if s['type']==1)} PT_LOAD segments")
 
-   
-    # Strategy 1: section headers (if they happen to be in a PT_LOAD)
-    found.update(search_section_symbols(layer, base_address, elf_info, target_set, segments))
+    # Strategy 1: section headers
+    print(f"\n--- Strategy 1: Section Headers ---")
+    s1 = search_section_symbols(layer, base_address, elf_info, target_set, segments)
+    print(f"  Strategy 1 found: {s1}")
+    for name, addr in s1.items():
+        print(f"    {name} = 0x{addr:x}")
+    found.update(s1)
     remaining = target_set - set(found.keys())
+    print(f"  Remaining after S1: {remaining}")
     if not remaining:
         return found
 
-    # Strategy 2: dynamic symbols (reliable but only exported symbols)
-    found.update(search_dynamic_symbols(layer, base_address, elf_info, remaining, segments))
+    # Strategy 2: dynamic symbols
+    print(f"\n--- Strategy 2: Dynamic Symbols ---")
+    s2 = search_dynamic_symbols(layer, base_address, elf_info, remaining, segments)
+    print(f"  Strategy 2 found: {s2}")
+    for name, addr in s2.items():
+        print(f"    {name} = 0x{addr:x}")
+        if name == "arenas":
+            valid = _validate_arenas_pointer(layer, addr)
+            print(f"    validation: {'PASS' if valid else 'FAIL'}")
+    found.update(s2)
+
+    # Validate arenas after Strategy 2
+    if "arenas" in found and "arenas" in remaining:
+        if not _validate_arenas_pointer(layer, found["arenas"]):
+            print(f"  DISCARDING invalid 'arenas' at 0x{found['arenas']:x}")
+            del found["arenas"]
+            if "maxarenas" in found and "maxarenas" in remaining:
+                del found["maxarenas"]
+
     remaining = target_set - set(found.keys())
+    print(f"  Remaining after S2: {remaining}")
     if not remaining:
         return found
 
-    # Strategy 3: LTO-renamed variants (arenas.lto_priv, etc.)
-    found.update(search_lto_symbols(layer, base_address, elf_info, remaining, segments))
+    # Strategy 3: LTO variants
+    print(f"\n--- Strategy 3: LTO Variants ---")
+    s3 = search_lto_symbols(layer, base_address, elf_info, remaining, segments)
+    print(f"  Strategy 3 found: {s3}")
+    found.update(s3)
     remaining = target_set - set(found.keys())
+    print(f"  Remaining after S3: {remaining}")
     if not remaining:
         return found
 
-    # Strategy 4: raw data scan (find symbol strings in PT_LOAD segments)
-    found.update(search_mapped_symtab(layer, base_address, elf_info, remaining, segments))
+    # Strategy 4: mapped symtab scan
+    print(f"\n--- Strategy 4: Mapped Symtab Scan ---")
+    s4 = search_mapped_symtab(layer, base_address, elf_info, remaining, segments)
+    print(f"  Strategy 4 found: {s4}")
+    for name, addr in s4.items():
+        print(f"    {name} = 0x{addr:x}")
+        if name == "arenas":
+            valid = _validate_arenas_pointer(layer, addr)
+            print(f"    validation: {'PASS' if valid else 'FAIL'}")
+    found.update(s4)
+
+    # Validate arenas after Strategy 4
+    if "arenas" in found and "arenas" in remaining:
+        if not _validate_arenas_pointer(layer, found["arenas"]):
+            print(f"  DISCARDING invalid 'arenas' at 0x{found['arenas']:x}")
+            del found["arenas"]
+            if "maxarenas" in found and "maxarenas" in remaining:
+                del found["maxarenas"]
+
     remaining = target_set - set(found.keys())
+    print(f"  Remaining after S4: {remaining}")
     if not remaining:
         return found
 
-    # Strategy 5: structural pattern matching (arena-specific heuristic)
+    # Strategy 5: BSS scan for arenas
+    print(f"\n--- Strategy 5: BSS Scan for arenas ---")
     if "arenas" in remaining and task is not None:
-        found.update(scan_bss_for_arenas(
+        print(f"  Scanning writable Python VMAs...")
+        for vma in task.mm.get_vma_iter():
+            try:
+                path = vma.get_name(context, task)
+            except Exception:
+                continue
+            path_str = str(path) if path else ""
+            if "python" in path_str.lower():
+                flags = vma.get_protection()
+                #print(f"    VMA 0x{int(vma.vm_start):x}-0x{int(vma.vm_end):x} "
+                     # f"{flags} {path_str}")
+
+        s5 = scan_bss_for_arenas(
             layer, base_address, elf_info, task, context, proc_layer_name
-        ))
-    # Strategy 6: structural scan for _PyRuntime in .bss/.data
+        )
+        print(f"  Strategy 5 found: {s5}")
+        for name, addr in s5.items():
+            print(f"    {name} = 0x{addr:x}")
+            if name == "arenas":
+                ptr_bytes = _read_bytes(layer, addr, 8)
+                if ptr_bytes:
+                    ptr_val = int.from_bytes(ptr_bytes, 'little')
+                    print(f"    arenas pointer dereference: 0x{addr:x} -> 0x{ptr_val:x}")
+        found.update(s5)
+    else:
+        print(f"  Skipped: arenas {'not in remaining' if 'arenas' not in remaining else 'no task'}")
+
+    # If we found arenas but not maxarenas from S5, do a targeted search
+    if "arenas" in found and "maxarenas" not in found:
+        print(f"\n--- Fallback: Searching for maxarenas near arenas 0x{found['arenas']:x} ---")
+        arenas_addr = found["arenas"]
+
+        # Dereference to count actual arenas for validation
+        ptr_bytes = _read_bytes(layer, arenas_addr, 8)
+        if ptr_bytes:
+            arenas_ptr_val = int.from_bytes(ptr_bytes, 'little')
+            observed = _count_valid_arenas_from_ptr(layer, arenas_ptr_val, max_check=256)
+        else:
+            observed = 1
+
+        # Search nearby for a uint32 that's a valid capacity
+        # Prefer closest to arenas, and require power-of-2-of-16 pattern
+        maxarenas_candidates = []
+        for delta in range(-64, 68, 4):
+            if delta == 0:
+                continue
+            candidate = arenas_addr + delta
+            try:
+                raw = layer.read(candidate, 8, pad=False)
+                val = int.from_bytes(raw[0:4], 'little')
+                upper = int.from_bytes(raw[4:8], 'little')
+
+                # Must be >= observed arenas and <= 4096
+                if val < observed or val > 4096:
+                    continue
+                # Upper 4 bytes should be 0 (it's a uint32, not a pointer)
+                if upper != 0:
+                    full_val = int.from_bytes(raw, 'little')
+                    if 0x10000 < full_val < 0x7fffffffffff:
+                        continue
+
+                # Check power-of-2-of-16 pattern
+                is_pow2_of_16 = False
+                if val >= 16:
+                    v = val
+                    while v > 16:
+                        if v % 2 != 0:
+                            break
+                        v //= 2
+                    is_pow2_of_16 = (v == 16)
+
+                print(f"    delta={delta:+d} 0x{candidate:x} = {val} (upper32=0x{upper:x})"
+                      f"{' [pow2x16]' if is_pow2_of_16 else ''}")
+
+                maxarenas_candidates.append((candidate, val, abs(delta), is_pow2_of_16))
+
+            except Exception:
+                continue
+
+        if maxarenas_candidates:
+            # Prefer: power-of-2-of-16, then closest
+            maxarenas_candidates.sort(key=lambda c: (not c[3], c[2], c[1]))
+            best = maxarenas_candidates[0]
+            found["maxarenas"] = best[0]
+            print(f"  Found maxarenas at 0x{best[0]:x} = {best[1]}")
+
+    # Strategy 6: _PyRuntime
+    remaining = target_set - set(found.keys())
     if "_PyRuntime" in remaining and task is not None:
+        print(f"\n--- Strategy 6: BSS Scan for _PyRuntime ---")
         found.update(scan_bss_for_pyruntime(
             layer, base_address, elf_info, task, context, proc_layer_name
         ))
-    print(f"resolve_symbols returning: {found}, remaining: {target_set - set(found.keys())}")
+
+    remaining = target_set - set(found.keys())
+    print(f"\nresolve_symbols returning: {found}, remaining: {remaining}")
     return found
 
-
+    
 # ---------------------------------------------------------------------------
 # High-level API
 # ---------------------------------------------------------------------------
@@ -1118,11 +1628,6 @@ def find_python_module_base(
 ) -> Optional[Tuple[int, str]]:
     """
     Locate the ELF base address of a Python module in the process's VMA list.
-    
-    We look for VMAs whose backing file path contains module_substring,
-    then verify the mapping starts with the ELF magic. For shared libraries
-    that are mapped at multiple VMAs (text, rodata, data, etc.), we want the
-    lowest address — that's where the ELF header lives.
     """
     lowest_base = None
     best_path = None
@@ -1146,7 +1651,6 @@ def find_python_module_base(
         vm_start = int(vma.vm_start)
         layer = context.layers[proc_layer_name]
         
-        # Only accept VMAs that actually start with an ELF header
         magic = _read_bytes(layer, vm_start, 4)
         if magic != b'\x7fELF':
             continue
@@ -1164,26 +1668,17 @@ def find_symbol_in_process(
 ) -> Dict[str, int]:
     """
     Top-level entry point: find symbols in a Python module within a live process.
-
-    Tries module_substring first (e.g. "libpython" for shared-library builds),
-    then falls back to "python" (for statically-linked builds where the binary
-    itself contains the symbols).
-
-    Unlike the previous version, this tries BOTH bases if the first one
-    doesn't resolve all requested symbols.
     """
     layer = context.layers[proc_layer_name]
     all_found = {}
     remaining = list(symbol_names)
 
-    # Build a list of candidate ELF bases to search, in priority order
     candidates = []
 
     result = find_python_module_base(context, proc_layer_name, task, module_substring)
     if result is not None:
         candidates.append(result)
 
-    # Always also try "python" as a fallback base, even if the first matched
     if module_substring.lower() != "python":
         result2 = find_python_module_base(context, proc_layer_name, task, "python")
         if result2 is not None and (not candidates or result2[0] != candidates[0][0]):
@@ -1207,10 +1702,6 @@ def find_symbol_in_process(
 
 # ---------------------------------------------------------------------------
 # Standalone plugin — can be run from the command line for debugging
-#
-# Usage:
-#   vol.py -f dump.vmem linux.elf_parsing.ELFSymbolFinder \
-#       --module-name python --symbol arenas,maxarenas --pid 1234
 # ---------------------------------------------------------------------------
 
 class ELFSymbolFinder(interfaces.plugins.PluginInterface):

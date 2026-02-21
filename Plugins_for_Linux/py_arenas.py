@@ -2,12 +2,73 @@ from volatility3.framework import interfaces, renderers, constants
 from volatility3.framework.configuration import requirements
 from volatility3.plugins.linux import pslist
 import collections
-from volatility3.plugins.linux import elf_parsing
+from volatility3.plugins.linux import elf_parsing3
 import textwrap
 import dis
 import types
 import re
 import hashlib
+
+#==========================================================================
+# SYMBOL TABLE REGISTRY - maps Python version to loader parameters
+# ==========================================================================
+SYMBOL_TABLE_REGISTRY = {
+    (3, 6): (
+        'volatility3.framework.symbols.generic.types.python.python36_handler',
+        'Python_3_6_15_IntermedSymbols',
+        'generic/types/python',
+        'python36',
+    ),
+    (3, 7): (
+        'volatility3.framework.symbols.generic.types.python.python37_handler',
+        'Python_3_7_17_IntermedSymbols',
+        'generic/types/python',
+        'python37',
+    ),
+    (3, 8): (
+        'volatility3.framework.symbols.generic.types.python.python38_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python38',
+    ),
+    (3, 9): (
+        'volatility3.framework.symbols.generic.types.python.python39_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python39',
+    ),
+    (3, 10): (
+        'volatility3.framework.symbols.generic.types.python.python310_handler',
+        'Python_3_8_18_IntermedSymbols',
+        'generic/types/python',
+        'python310',
+    ),
+    (3, 11): (
+        'volatility3.framework.symbols.generic.types.python.python311_handler',
+        'Python_3_11_IntermedSymbols',
+        'generic/types/python',
+        'python311',
+    ),
+    (3, 12): (
+        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'Python_3_12_IntermedSymbols',
+        'generic/types/python',
+        'python312',
+    ),
+    (3, 13): (
+        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'Python_3_12_IntermedSymbols',
+        'generic/types/python',
+        'python313',
+    ),
+    (3, 14): (
+        'volatility3.framework.symbols.generic.types.python.python314_handler',
+        'Python_3_14_IntermedSymbols',
+        'generic/types/python',
+        'python314',
+    ),
+}
+
 class Py_Arenas(interfaces.plugins.PluginInterface):
     """
     Walks CPython's obmalloc arena/pool/block hierarchy to extract
@@ -63,21 +124,21 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
     
     def get_arena_addresses(self, task):
       """
-        Resolves the `arenas` and `maxarenas` global variables from the
-        Python process's ELF symbols. These are internal to CPython's
-        obmalloc.c and hold the base pointer to the arena_object array
-        and the current array capacity.
+      Resolves the `arenas` and `maxarenas` global variables from the
+      Python process's ELF symbols. These are internal to CPython's
+      obmalloc.c and hold the base pointer to the arena_object array
+      and the current array capacity.
 
-        Strategy:
-          1. Try libpython*.so (shared/pyenv builds)
-          2. Fall back to the python binary itself (static/system builds)
-          3. Handle LTO-renamed variants (e.g. arenas.lto_priv)
-        """
+      Strategy:
+      1. Try libpython*.so (shared/pyenv builds)
+      2. Fall back to the python binary itself (static/system builds)
+      3. If maxarenas symbol not found, probe the arena array forward
+         until we hit consecutive zero-address entries (end of array)
+      """
       try:
         proc_layer_name = task.add_process_layer()
         curr_layer = self.context.layers[proc_layer_name]
-        
-       
+
         symbols_needed = [
             "arenas",
             "maxarenas",
@@ -85,73 +146,107 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
             "narenas_currently_allocated",
             "narenas_highwater",
         ]
-        # Try shared library first — pyenv and custom builds link libpython
-        resolved = elf_parsing.find_symbol_in_process(
+
+        # Try shared library first (pyenv/custom builds)
+        resolved = elf_parsing3.find_symbol_in_process(
             self.context, proc_layer_name, task,
             module_substring="libpython",
             symbol_names=symbols_needed,
         )
-        
-        # System Python (e.g. Ubuntu's /usr/bin/python3.8) is statically linked
+
+        # Fall back to main binary (system Python, statically linked)
         if not resolved or "arenas" not in resolved:
-            resolved_fallback = elf_parsing.find_symbol_in_process(
+            resolved_fallback = elf_parsing3.find_symbol_in_process(
                 self.context, proc_layer_name, task,
                 module_substring="python",
                 symbol_names=symbols_needed,
             )
-            
             for k, v in resolved_fallback.items():
                 if k not in resolved:
                     resolved[k] = v
-        
-      
+
         ARENAS_ADDR = resolved.get("arenas")
         MAXARENAS_ADDR = resolved.get("maxarenas")
-        
+
         if ARENAS_ADDR is None:
             print("ERROR: Could not resolve 'arenas' symbol from ELF")
             print(f"  Symbols found: {resolved}")
             return None, None
-        
-        if MAXARENAS_ADDR is None:
-            print("WARNING: Could not resolve 'maxarenas', will estimate from arena data")
-        
+
         print(f"Resolved arenas symbol at: 0x{ARENAS_ADDR:x}")
         if MAXARENAS_ADDR:
             print(f"Resolved maxarenas symbol at: 0x{MAXARENAS_ADDR:x}")
-        
-       
+
         for name in ["usable_arenas", "narenas_currently_allocated", "narenas_highwater"]:
             if name in resolved:
                 print(f"Resolved {name} at: 0x{resolved[name]:x}")
-        
-        # Dereference: arenas is a pointer to the arena_object array-
+
+        # Dereference: arenas is a pointer to the arena_object array
         arenas_ptr_bytes = curr_layer.read(ARENAS_ADDR, 8)
         arenas_ptr = int.from_bytes(arenas_ptr_bytes, byteorder='little', signed=False)
         print(f"Arenas pointer value: 0x{arenas_ptr:x}")
-        
-        if MAXARENAS_ADDR:
-            maxarenas_bytes = curr_layer.read(MAXARENAS_ADDR, 4)
-            maxarenas_count = int.from_bytes(maxarenas_bytes, byteorder='little', signed=False)
-        else:
-            maxarenas_count = 16  # Conservative default
-            print(f"Using default maxarenas: {maxarenas_count}")
-        
-        print(f"Maxarenas count: {maxarenas_count}")
-        
+
         if not curr_layer.is_valid(arenas_ptr, 8):
             print(f"ERROR: Arena pointer 0x{arenas_ptr:x} points to invalid memory!")
             return None, None
-        
+
+        if MAXARENAS_ADDR:
+            maxarenas_bytes = curr_layer.read(MAXARENAS_ADDR, 4)
+            maxarenas_count = int.from_bytes(maxarenas_bytes, byteorder='little', signed=False)
+            print(f"Maxarenas count (from symbol): {maxarenas_count}")
+        else:
+            # Symbol missing (common in 3.7 debug/LTO builds) — probe instead
+            maxarenas_count = self._probe_maxarenas(curr_layer, arenas_ptr)
+            print(f"Maxarenas count (probed): {maxarenas_count}")
+
         return arenas_ptr, maxarenas_count
-        
+
       except Exception as e:
         print(f"Error reading arena addresses: {e}")
         import traceback
         traceback.print_exc()
         return None, None
+
     
     
+    
+    def _probe_maxarenas(self, curr_layer, arenas_ptr, arena_obj_size=48):
+      """
+      Scan the arena_object array forward to find its true size.
+      Each entry is 48 bytes; the first 8 bytes are the arena's mmap base
+      address (0 if never used). We stop after 3 consecutive zeros or
+      unreadable memory.
+      """
+      ARENA_OBJ_SIZE = 48
+      MAX_PROBE = 256          # 256 arenas = 64MB, way more than typical
+      ZERO_STOP_THRESHOLD = 3  # consecutive empty slots before we quit
+
+      count = 0
+      consecutive_zeros = 0
+
+      for i in range(MAX_PROBE):
+        offset = arenas_ptr + (i * arena_obj_size)
+
+        if not curr_layer.is_valid(offset, arena_obj_size):
+            break
+
+        addr = int.from_bytes(curr_layer.read(offset, 8), 'little')
+
+        if addr == 0:
+            consecutive_zeros += 1
+            count += 1
+            if consecutive_zeros >= ZERO_STOP_THRESHOLD:
+                count -= consecutive_zeros  # trim trailing empties
+                break
+        else:
+            consecutive_zeros = 0
+            count += 1
+
+      if count == 0:
+        print("  WARNING: Probe found 0 arenas, falling back to 16")
+        count = 16
+
+      return count
     
     def validate_arena(self, arena_obj, layer_name):
       """
@@ -180,92 +275,50 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
      
       # Pool start should be within the 256KB arena, accounting for alignment  
       diff = pool_addr - arena_addr
-      if diff < 0x10000 or diff > 0x80000:
+      if diff < 0x1000 or diff > 0x80000:
         return False
         
       return True
    
    
     def debug_pool_addresses(self, task, arena_obj, arena_idx, ntotalpools, python_table_name):
-      """Debug pool address calculations with correct structure"""
+      """Debug pool address calculations"""
       try:
         proc_layer_name = task.add_process_layer()
         curr_layer = self.context.layers[proc_layer_name]
         arena_address = int(arena_obj.address)
-        print(f"\n=== ARENA {arena_idx} ADDRESS DEBUGGING ===")
-        print(f"Arena address: 0x{arena_address:x}")
-            
-        # Check if arena+256KB is valid (expected end of arena)
-        alt_pool_addr = arena_address + 0x40000
-        print(f" pool addr (arena + 256KB): 0x{alt_pool_addr:x}")
-        if curr_layer.is_valid(alt_pool_addr, 48):
-            print(f" pool address is VALID memory")
-        else:
-            print(f" pool address is INVALID memory")
-            
-        #  arena address itself as first pool
-        print(f"Testing arena address as pool: 0x{arena_address:x}")
-        if curr_layer.is_valid(arena_address, 48):
-            print(f"Arena address is VALID for pool data")
-            arena_data = curr_layer.read(arena_address, 48)
-          
-        else:
-            print(f"Arena address is INVALID for pool data")
+        pool_address = int(arena_obj.pool_address)
 
-        # Walk each 4KB pool and dump its header fields
-        # Pool header layout (48 bytes):
-        #   [0:4]   ref.count (ob_refcnt union)
-        #   [8:16]  freeblock ptr
-        #   [16:24] nextpool ptr
-        #   [24:32] prevpool ptr
-        #   [32:36] arenaindex
-        #   [36:40] szidx (size class index)
-        #   [40:44] nextoffset
-        #   [44:48] maxnextoffset
-        for pool_idx in range(ntotalpools):
+        # FIX: same carved-pool logic
+        num_carved = (pool_address - arena_address) // 4096
+        if num_carved <= 0 or num_carved > ntotalpools:
+            num_carved = ntotalpools
+
+        print(f"\n=== ARENA {arena_idx} POOL DEBUG ===")
+        print(f"  address=0x{arena_address:x} pool_address=0x{pool_address:x} carved={num_carved}")
+
+        for pool_idx in range(num_carved):
             pool_offset = arena_address + (pool_idx * 4096)
-           # print(f"\nPool {pool_idx} (0x{pool_offset:x}):")
-            pool_offset_alt = arena_address + (pool_idx * 4096)
-          # print(f"  Original calc: 0x{pool_offset_original:x}")
-            #print(f"  pool address calc: 0x{pool_offset_alt:x}")
-            if curr_layer.is_valid(pool_offset_alt, 48):
-                   pool_bytes = curr_layer.read(pool_offset, 48)
-                   szidx = int.from_bytes(pool_bytes[36:40], byteorder='little')
-                   nextoffset = int.from_bytes(pool_bytes[40:44], byteorder='little')
-                   #print(f"Size index={szidx}, Next offset={nextoffset}")
+            if not curr_layer.is_valid(pool_offset, 48):
+                print(f"  Pool {pool_idx} (0x{pool_offset:x}): INVALID memory")
+                continue
 
-            if curr_layer.is_valid(pool_offset, 48):
-                # Read pool header - 48 bytes total
-                pool_bytes = curr_layer.read(pool_offset, 48)
-                ref_count = int.from_bytes(pool_bytes[0:4], byteorder='little') 
-                freeblock = int.from_bytes(pool_bytes[8:16], byteorder='little')
-                nextpool = int.from_bytes(pool_bytes[16:24], byteorder='little')
-                prevpool = int.from_bytes(pool_bytes[24:32], byteorder='little')
-                arenaindex = int.from_bytes(pool_bytes[32:36], byteorder='little')
-                szidx = int.from_bytes(pool_bytes[36:40], byteorder='little')     
-                nextoffset = int.from_bytes(pool_bytes[40:44], byteorder='little')
-                maxnextoffset = int.from_bytes(pool_bytes[44:48], byteorder='little')
-               
-                # CPython size classes: szidx maps to block sizes 8, 16, 24, ... up to 512
-                # szidx=0 means pool is free, >64 is invalid
-                if szidx > 0 and szidx <= 64:  # Valid size class range
-                    
-                    size_classes = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128,
-                                  144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 
-                                  480, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1152, 1280, 1408, 
-                                  1536, 1664, 1792, 1920, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 
-                                  3840, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192]
-                    
-                    if szidx <= len(size_classes):
-                        block_size = size_classes[szidx - 1]
-                     
-                elif szidx == 0:
-                    print(f"  → Free pool (size index 0)")
-                else:
-                    print(f"Invalid size class {szidx}")
-              
+            pool_obj = self.context.object(
+                object_type=python_table_name + constants.BANG + "pool_header",
+                layer_name=proc_layer_name,
+                offset=pool_offset)
+
+            szidx = int(pool_obj.szidx)
+            nextoffset = int(pool_obj.nextoffset)
+            arenaindex = int(pool_obj.arenaindex)
+
+            if szidx > 0 and szidx <= 64:
+                print(f"  Pool {pool_idx} (0x{pool_offset:x}): szidx={szidx} "
+                      f"nextoffset={nextoffset} arenaindex={arenaindex}")
+            elif szidx == 0:
+                print(f"  Pool {pool_idx} (0x{pool_offset:x}): FREE")
             else:
-                print(f"Invalid memory address")
+                print(f"  Pool {pool_idx} (0x{pool_offset:x}): INVALID szidx={szidx}")
                 
       except Exception as e:
         print(f"Pool debug error: {e}")
@@ -273,65 +326,32 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
    
     def is_valid_pyobject_header(self, refcnt, type_ptr, curr_layer):
       """
-      Checks whether a block's first 16 bytes look like a valid PyObject.
-      We validate ob_refcnt range and then peek at the type object itself
-      to confirm it has a sane refcount and a valid tp_type pointer.
-      This filters out most garbage blocks.
+      Validates a candidate PyObject header (ob_refcnt + ob_type).
+      Also peeks at the type object to confirm it looks sane.
+      Uses ob_refcnt_offset for debug builds when reading the type object.
       """
-      
-      if refcnt < 1 or refcnt > 1000000:  
+      if refcnt < 1 or refcnt > 1000000:
         return False
-        
-      
+
       if type_ptr < 0x1000 or not curr_layer.is_valid(type_ptr, 8):
         return False
-    
-   
+
       try:
-        type_data = curr_layer.read(type_ptr, 16)
-        type_refcnt = int.from_bytes(type_data[0:8], 'little')
-        type_type_ptr = int.from_bytes(type_data[8:16], 'little')
+        ob_refcnt_offset = getattr(self, '_ob_refcnt_offset', 0)
+
+        # Read the type object's own header (with debug offset if needed)
+        type_header = curr_layer.read(type_ptr + ob_refcnt_offset, 16)
+        type_refcnt = int.from_bytes(type_header[0:8], 'little')
+        type_type_ptr = int.from_bytes(type_header[8:16], 'little')
+
         if type_refcnt < 1 or type_refcnt > 10000000:
             return False
-            
-        # ob_type of a type object points to PyType_Type (or a metaclass)
         if type_type_ptr < 0x1000:
             return False
-            
+
         return True
       except Exception:
         return False
-   
-    def get_python_object_info(self, obj_candidate, block_size, block_idx):
-      """Extracts type, refcount, and value from a PyObject for reporting."""
-      try:
-        obj_type = obj_candidate.get_type_name()
-        refcnt = int(obj_candidate.ob_refcnt)
-        address = obj_candidate.vol.offset
-        
-        try:
-            obj_value = obj_candidate.get_value(cur_depth=0, max_depth=1)
-            value_str = str(obj_value)
-            if len(value_str) > 100:
-                value_str = value_str[:100] + "..."
-        except Exception:
-            obj_value = f"<{obj_type} object>"
-            value_str = obj_value
-        
-        return {
-            'block_index': block_idx,
-            'address': hex(address),
-            'type': obj_type,
-            'obj': obj_candidate,
-            'refcnt': refcnt,
-            'value': value_str,
-            'block_size': block_size,
-            'size_estimate': self.estimate_object_size(obj_candidate, obj_type)
-        }
-        
-      except Exception:
-        return None
-    
     
     def estimate_object_size(self, obj_candidate, obj_type):
       """
@@ -350,34 +370,45 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
     
    
      
+    
     def extract_pool_objects(self, task, pool_obj, pool_info, python_table_name):
       """
-      Scans all allocated blocks within a single pool for module objects.
+      Scans allocated blocks in a pool for module objects.
+      Skips freelist blocks and blocks past nextoffset.
 
-      For each block:
-          1. Skip blocks on the freelist (linked via freeblock pointers)
-          2. Skip blocks past nextoffset (never-allocated region)
-          3. Validate the first 16 bytes as a PyObject header
-          4. Cast to PyObject and check type — only keep 'module' objects
-          5. Extract module name via PyModuleObject
-
-      Returns list of (address, name, module_obj) tuples.
+      DIAGNOSTIC VERSION: tracks objects at each pipeline stage.
       """
-     
       modules = []
+      # --- Diagnostic counters ---
+      diag = {
+        'blocks_scanned': 0,
+        'blocks_skipped_free': 0,
+        'blocks_skipped_unreadable': 0,
+        'blocks_past_end': 0,
+        'valid_header': 0,
+        'invalid_header': 0,
+        'type_resolved': 0,
+        'type_failed': 0,
+        'type_names': {},       # type_name -> count
+        'module_cast_ok': 0,
+        'module_cast_fail': 0,
+        'module_name_ok': 0,
+      }
+
       try:
         proc_layer_name = task.add_process_layer()
         curr_layer = self.context.layers[proc_layer_name]
         block_size = pool_info['block_size']
         if not isinstance(block_size, int) or block_size <= 0:
-            return []
+            return [], diag
 
         pool_base = pool_obj.vol.offset
-        pool_data_start = pool_base + 48 # skip pool_header (48 bytes)
+        pool_header_size = getattr(self, '_pool_header_size', 48)
+        pool_data_start = pool_base + pool_header_size
         nextoffset = pool_info['nextoffset']
         allocated_region_end = pool_base + nextoffset
-        
-        # Build the set of free block addresses by walking the freelist 
+
+        # Walk the freelist
         free_blocks = set()
         freeblock_addr = pool_info.get('freeblock_addr', 0)
         max_free = (4096 - 48) // block_size
@@ -386,39 +417,61 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
             if freeblock_addr < pool_data_start or freeblock_addr >= pool_base + 4096:
                 break
             if (freeblock_addr - pool_data_start) % block_size != 0:
-                break # not aligned to block boundary — corrupted
+                break
             if freeblock_addr in free_blocks:
-                break # cycle detected
+                break
             if not curr_layer.is_valid(freeblock_addr, 8):
                 break
             free_blocks.add(freeblock_addr)
             if len(free_blocks) > max_free:
-                break  # more free blocks than possible — bail
+                break
             try:
                 next_ptr_bytes = curr_layer.read(freeblock_addr, 8)
                 freeblock_addr = int.from_bytes(next_ptr_bytes, byteorder='little')
             except Exception:
                 break
-        
-        # Iterate each block slot in the pool
+
+        if not hasattr(self, '_ob_refcnt_offset'):
+            try:
+                pyobj_type = self.context.symbol_space.get_type(
+                    python_table_name + constants.BANG + "PyObject"
+                )
+                self._ob_refcnt_offset = pyobj_type.relative_child_offset('ob_refcnt')
+            except Exception:
+                self._ob_refcnt_offset = 0
+            print(f"  ob_refcnt offset from ISF: {self._ob_refcnt_offset}")
+        ob_refcnt_offset = self._ob_refcnt_offset
+
         max_blocks = (4096 - 48) // block_size
         for block_idx in range(max_blocks):
             block_offset = pool_data_start + (block_idx * block_size)
+
             if block_offset >= allocated_region_end:
-                break # past the high-water mark
+                diag['blocks_past_end'] += 1
+                continue  # changed from break to continue for counting
             if block_offset in free_blocks:
-                continue # on freelist, skip
-            if not curr_layer.is_valid(block_offset, 16):
+                diag['blocks_skipped_free'] += 1
                 continue
+            if not curr_layer.is_valid(block_offset + ob_refcnt_offset, 16):
+                diag['blocks_skipped_unreadable'] += 1
+                continue
+
+            diag['blocks_scanned'] += 1
+
             try:
-                # Read ob_refcnt (8 bytes) + ob_type pointer (8 bytes)
-                header_data = curr_layer.read(block_offset, 16)
+                header_data = curr_layer.read(block_offset + ob_refcnt_offset, 16)
                 if len(header_data) < 16:
+                    diag['invalid_header'] += 1
                     continue
+
                 refcnt = int.from_bytes(header_data[0:8], byteorder='little')
                 type_ptr = int.from_bytes(header_data[8:16], byteorder='little')
+
                 if not self.is_valid_pyobject_header(refcnt, type_ptr, curr_layer):
+                    diag['invalid_header'] += 1
                     continue
+
+                diag['valid_header'] += 1
 
                 obj_candidate = self.context.object(
                     object_type=python_table_name + constants.BANG + "PyObject",
@@ -428,16 +481,29 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
 
                 try:
                     type_name = obj_candidate.get_type_name()
-                except Exception:
+                except Exception as e:
+                    diag['type_failed'] += 1
                     continue
-                
-                # We only care about module objects for SBOM/dependency extraction
+
+                diag['type_resolved'] += 1
+                diag['type_names'][type_name] = diag['type_names'].get(type_name, 0) + 1
+
                 if type_name != 'module':
                     continue
 
-                module_obj = obj_candidate.cast_to("PyModuleObject")
+                # --- Module found! Try to cast and get name ---
+                try:
+                    module_obj = obj_candidate.cast_to("PyModuleObject")
+                    diag['module_cast_ok'] += 1
+                except Exception as e:
+                    diag['module_cast_fail'] += 1
+                    # Still record it with unknown name
+                    modules.append((block_offset, "<cast_failed>", None))
+                    continue
+
                 try:
                     mod_name = module_obj.get_name()
+                    diag['module_name_ok'] += 1
                 except Exception:
                     mod_name = "<unknown>"
 
@@ -446,125 +512,146 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
             except Exception:
                 continue
 
-        return modules
+        return modules, diag
 
       except Exception as e:
         print(f"Pool extraction error: {e}")
-        return []
+        return [], diag
 
 
     
     def comprehensive_memory_analysis(self, task, python_table_name):
       """
-      Main analysis loop: resolves arena addresses, then walks
-      arenas → pools → blocks to find all module objects.
-
-      Each arena_object is 48 bytes with layout:
-          [0:8]   address       — base of the 256KB mmap'd region
-          [8:16]  pool_address  — first usable pool (aligned)
-          [16:20] nfreepools
-          [20:24] ntotalpools
-          [24:32] freepools     — head of free pool linked list
-          [32:48] nextarena/prevarena pointers (doubly-linked list)
+      Main analysis loop with full diagnostics.
       """
-      
+
       arenas_ptr, maxarenas_count = self.get_arena_addresses(task)
       modules = []
       if not arenas_ptr or not maxarenas_count:
         print("Failed to retrieve arena information")
-        return
-    
-      print(f"\n=== DEBUGGING ARENA STRUCTURE READING ===")
-    
-      for arena_idx in range(maxarenas_count):  
+        return []
+
+      print(f"\n=== ARENA ANALYSIS ===")
+
+      # Global diagnostic accumulators
+      global_types = {}
+      global_diag = {
+        'total_pools': 0,
+        'active_pools': 0,
+        'total_blocks_scanned': 0,
+        'total_valid_headers': 0,
+        'total_type_resolved': 0,
+        'total_type_failed': 0,
+        'total_modules': 0,
+      }
+
+      for arena_idx in range(maxarenas_count):
         arena_offset = arenas_ptr + (arena_idx * 48)
-        
-        print(f"\nArena {arena_idx} Debug:")
-        print(f"  Calculated offset: 0x{arena_offset:x}")
-        
+
         try:
             proc_layer_name = task.add_process_layer()
             curr_layer = self.context.layers[proc_layer_name]
-            # arena_object structs are contiguous — 48 bytes each
-            raw_arena_bytes = curr_layer.read(arena_offset, 48)
-            
-           
-            
-            # Manual field parsing for verification
-            arena_addr = int.from_bytes(raw_arena_bytes[0:8], byteorder='little')
-            pool_addr = int.from_bytes(raw_arena_bytes[8:16], byteorder='little')
-            nfreepools = int.from_bytes(raw_arena_bytes[16:20], byteorder='little')
-            ntotalpools = int.from_bytes(raw_arena_bytes[20:24], byteorder='little')
-            freepools_ptr = int.from_bytes(raw_arena_bytes[24:32], byteorder='little')
-            
-           
-            print(f"    Arena address: 0x{arena_addr:x}")
-            print(f"    Pool address: 0x{pool_addr:x}")
-            print(f"    Free pools: {nfreepools}")
-            print(f"    Total pools: {ntotalpools}")
-            print(f"    Free pools ptr: 0x{freepools_ptr:x}")
-            
-            # Verify addresses make sense
-            if arena_addr != 0:
-                addr_diff = abs(arena_addr - pool_addr)
-                expected_diff = 256 * 1024   # 256KB arena size
-                print(f"    Address difference: 0x{addr_diff:x} (expected ~0x{expected_diff:x})")
-                
-                if addr_diff > expected_diff * 2:
-                    print(f"    WARNING: Address difference too large!")
-                
-                
-                if not curr_layer.is_valid(arena_addr, 8):
-                    print(f"    ERROR: Arena address 0x{arena_addr:x} is invalid!")
-                if not curr_layer.is_valid(pool_addr, 8):
-                    print(f"    ERROR: Pool address 0x{pool_addr:x} is invalid!")
-            
-            # Also verify via the Volatility type overlay
+
+            if not curr_layer.is_valid(arena_offset, 48):
+                break
+
             arena_obj = self.context.object(
                 object_type=python_table_name + constants.BANG + "arena_object",
                 layer_name=proc_layer_name,
                 offset=arena_offset)
-          
-          
-            print(f"\n=== ARENA {arena_idx} STRUCTURE VERIFICATION ===")
-            print(f"Raw arena structure (48 bytes):")
-            arena_bytes = curr_layer.read(arena_offset, 48)
-            print(f"  Bytes 0-8 (address): {arena_bytes[0:8].hex()}")
-            pool_addr_interpreted = int.from_bytes(arena_bytes[0:8], byteorder='little')
-            print(f"    → Interpreted: 0x{pool_addr_interpreted:x}")
-            print(f"  Bytes 8-16 (pool_address): {arena_bytes[8:16].hex()}")
-            pool_addr_interpreted = int.from_bytes(arena_bytes[8:16], byteorder='little')
-            print(f"    → Interpreted: 0x{pool_addr_interpreted:x}")
-            print(f"  Bytes 16-20 (nfreepools): {arena_bytes[16:20].hex()}")
-            print(f"  Bytes 20-24 (ntotalpools): {arena_bytes[20:24].hex()}")
-            print(f"  Bytes 24-32 (freepools): {arena_bytes[24:32].hex()}")
+
             if not self.validate_arena(arena_obj, proc_layer_name):
-                print(f"  Arena {arena_idx} is invalid/corrupted - skipping")
+                print(f"  Arena {arena_idx}: invalid/free — skipping")
                 continue
-            self.debug_pool_addresses(task, arena_obj, arena_idx, ntotalpools, python_table_name)
-            print(f"  Structure-based reading:")
-            print(f"    Arena address: 0x{int(arena_obj.address):x}")
-            print(f"    Pool address: 0x{int(arena_obj.pool_address):x}")
-            print(f"    Active: {arena_obj.is_active()}")
-            print(f"\n ------------- EXTRACTING OBJECTS FROM ARENA {arena_idx} -------------")
-            arena_address=int(arena_obj.address) 
-            for pool_idx in range(ntotalpools):
+
+            arena_address = int(arena_obj.address)
+            pool_address = int(arena_obj.pool_address)
+            nfreepools = int.from_bytes(curr_layer.read(arena_offset + 16, 4), 'little')
+            ntotalpools = int.from_bytes(curr_layer.read(arena_offset + 20, 4), 'little')
+
+            num_carved = (pool_address - arena_address) // 4096
+            if num_carved <= 0 or num_carved > ntotalpools:
+                num_carved = ntotalpools
+
+            print(f"\n  Arena {arena_idx}: address=0x{arena_address:x} pool_address=0x{pool_address:x}")
+            print(f"    ntotalpools={ntotalpools} nfreepools={nfreepools} carved={num_carved}")
+
+            for pool_idx in range(num_carved):
                 pool_offset = arena_address + (pool_idx * 4096)
+                global_diag['total_pools'] += 1
                 try:
-                  pool_obj = self.context.object(object_type=python_table_name + constants.BANG + "pool_header",layer_name=proc_layer_name,offset=pool_offset)
-                  if pool_obj.is_pool_active():
-                     pool_info = pool_obj.get_pool_info()
-                     pool_modules = self.extract_pool_objects(task, pool_obj, pool_info, python_table_name)
-                     modules.extend(pool_modules)
-                  else:
-                     print(f"\n  Pool {pool_idx}: INACTIVE/FREE")
-            
+                    pool_obj = self.context.object(
+                        object_type=python_table_name + constants.BANG + "pool_header",
+                        layer_name=proc_layer_name,
+                        offset=pool_offset)
+
+                    if pool_obj.is_pool_active():
+                        global_diag['active_pools'] += 1
+                        pool_info = pool_obj.get_pool_info()
+                        print(f"    Pool {pool_idx}: ACTIVE szidx={pool_info['size_class']} "
+                              f"block_size={pool_info['block_size']} "
+                              f"allocated={pool_info['allocated_blocks']}")
+
+                        pool_modules, diag = self.extract_pool_objects(
+                            task, pool_obj, pool_info, python_table_name)
+
+                        if pool_modules:
+                            print(f"      → Found {len(pool_modules)} module(s): "
+                                  f"{[m[1] for m in pool_modules]}")
+                        modules.extend(pool_modules)
+
+                        # Accumulate global stats
+                        global_diag['total_blocks_scanned'] += diag['blocks_scanned']
+                        global_diag['total_valid_headers'] += diag['valid_header']
+                        global_diag['total_type_resolved'] += diag['type_resolved']
+                        global_diag['total_type_failed'] += diag['type_failed']
+                        global_diag['total_modules'] += len(pool_modules)
+
+                        for tn, cnt in diag['type_names'].items():
+                            global_types[tn] = global_types.get(tn, 0) + cnt
+
+                        # Per-pool detail only if something interesting
+                        if diag['valid_header'] > 0:
+                            print(f"      [DIAG] scanned={diag['blocks_scanned']} "
+                                  f"free={diag['blocks_skipped_free']} "
+                                  f"past_end={diag['blocks_past_end']} "
+                                  f"hdr_ok={diag['valid_header']} "
+                                  f"hdr_bad={diag['invalid_header']} "
+                                  f"type_ok={diag['type_resolved']} "
+                                  f"type_fail={diag['type_failed']}")
+                            if diag['type_names']:
+                                top = sorted(diag['type_names'].items(), key=lambda x: -x[1])[:5]
+                                print(f"      [TYPES] {', '.join(f'{n}:{c}' for n, c in top)}")
+
                 except Exception as e:
-                    print(f"\n  Pool {pool_idx}: Error - {e}")
-            print("*"*100)
+                    print(f"    Pool {pool_idx}: Error - {e}")
+
         except Exception as e:
             print(f"  Error reading arena {arena_idx}: {e}")
 
+      # ===== GLOBAL SUMMARY =====
+      print(f"\n{'='*60}")
+      print(f"=== DIAGNOSTIC SUMMARY ===")
+      print(f"{'='*60}")
+      print(f"  Total pools checked:     {global_diag['total_pools']}")
+      print(f"  Active pools:            {global_diag['active_pools']}")
+      print(f"  Blocks scanned:          {global_diag['total_blocks_scanned']}")
+      print(f"  Valid PyObject headers:   {global_diag['total_valid_headers']}")
+      print(f"  Type resolution success: {global_diag['total_type_resolved']}")
+      print(f"  Type resolution FAILED:  {global_diag['total_type_failed']}")
+      print(f"  Modules found:           {global_diag['total_modules']}")
+      print(f"")
+      if global_types:
+        print(f"  === TYPE DISTRIBUTION (top 20) ===")
+        sorted_types = sorted(global_types.items(), key=lambda x: -x[1])
+        for tn, cnt in sorted_types[:20]:
+            marker = " <<<" if tn == "module" else ""
+            print(f"    {tn:30s} {cnt:6d}{marker}")
+        if len(sorted_types) > 20:
+            others = sum(c for _, c in sorted_types[20:])
+            print(f"    {'(others)':30s} {others:6d}")
+        print(f"    {'TOTAL':30s} {sum(global_types.values()):6d}")
+      print(f"\n=== TOTAL MODULES FOUND: {len(modules)} ===")
       return modules
    
     def get_pool_info(self):
@@ -573,8 +660,11 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
       ref_count = self.get_ref_count()
     
       if isinstance(block_size, int) and block_size > 0:
-        usable_space = 4096 - 48 # pool page minus header
+        pool_header_size = getattr(self, '_pool_header_size', 48)# pool page minus header
+        usable_space = 4096 - pool_header_size
+        max_free = usable_space // block_size
         max_blocks = usable_space // block_size
+       
         utilization = (ref_count / max_blocks * 100) if max_blocks > 0 else 0
       else:
         max_blocks = "Unknown"
@@ -598,6 +688,27 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
         'freeblock_addr': freeblock_val
       }
    
+    
+    def _load_symbol_table(self, version):
+      key = version[:2]
+      entry = SYMBOL_TABLE_REGISTRY.get(key)
+      if not entry:
+         print(f"No symbol table registered for Python {key[0]}.{key[1]}")
+         print(f"  Available: {sorted(SYMBOL_TABLE_REGISTRY.keys())}")
+         return None
+
+      import_path, class_name, sub_path, filename = entry
+      module = __import__(import_path, fromlist=[class_name])
+      symbol_class = getattr(module, class_name)
+
+      python_table_name = symbol_class.create(
+        self.context, self.config_path,
+        sub_path=sub_path,
+        filename=filename,
+      )
+      print(f"Loaded symbol table: {class_name} → {python_table_name}")
+      return python_table_name
+    
     def _collect_data(self, tasks):
        
         """
@@ -610,21 +721,18 @@ class Py_Arenas(interfaces.plugins.PluginInterface):
             return []
         version = self.detect_python_version(task)
         print(f"Detected Python version: {version}")
-        collected_data=[]
-        if version and version[:2] == (3, 8):
-           from volatility3.framework.symbols.generic.types.python.python38_handler import Python_3_8_18_IntermedSymbols
-           python_table_name = Python_3_8_18_IntermedSymbols.create(self.context, self.config_path, sub_path="generic/types/python", filename="python38")
-      
-        else:
-           print(f"Unsupported Python version: {version}")
+        if not version:
+           print("Could not detect Python version")
            return []
-        
-        
+
+        python_table_name = self._load_symbol_table(version)
+        if not python_table_name:
+           return []
         task_layer = task.add_process_layer()
         curr_layer = self.context.layers[task_layer]
-        self.process_layer = curr_layer.name 
+        self.process_layer = curr_layer.name
         modules = self.comprehensive_memory_analysis(task, python_table_name)
-        
+     
         self._modules = modules
         return modules
 

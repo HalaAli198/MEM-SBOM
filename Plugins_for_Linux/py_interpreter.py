@@ -22,31 +22,31 @@ DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 SYMBOL_TABLE_REGISTRY = {
     (3, 6): (
         'volatility3.framework.symbols.generic.types.python.python36_handler',
-        'Python_3_6_15_IntermedSymbols',
+        'Python_3_6_IntermedSymbols',
         'generic/types/python',
         'python36',
     ),
     (3, 7): (
         'volatility3.framework.symbols.generic.types.python.python37_handler',
-        'Python_3_7_17_IntermedSymbols',
+        'Python_3_7_IntermedSymbols',
         'generic/types/python',
         'python37',
     ),
     (3, 8): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'Python_3_8_IntermedSymbols',
         'generic/types/python',
         'python38',
     ),
     (3, 9): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'Python_3_9_IntermedSymbols',
         'generic/types/python',
         'python39',
     ),
     (3, 10): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'Python_3_10_IntermedSymbols',
         'generic/types/python',
         'python310',
     ),
@@ -291,7 +291,7 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
                             continue
                         mod_obj = mod_val.cast_to("PyModuleObject")
                         mod_dict=mod_obj.get_dict2()
-                        print(mod_dict.keys())
+                        #print(mod_dict.keys())
                         addr = mod_obj.vol.offset
                         if addr not in seen_addrs:
                             seen_addrs.add(addr)

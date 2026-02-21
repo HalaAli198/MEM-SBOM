@@ -13,7 +13,7 @@ from decompyle3.main import decompile_file, decompile
 from io import StringIO
 import io
 Py_TPFLAGS_HEAPTYPE = 1 << 9 
-class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_10_IntermedSymbols(intermed.IntermediateSymbolTable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -2055,7 +2055,7 @@ class PySetObject(PyObject):
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
 
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
         # Debug log
 
         

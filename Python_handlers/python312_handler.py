@@ -1525,7 +1525,7 @@ class PySetObject(PyObject):
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
 
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
         if self.used == 0:
             return frozenset() if set_type_name == 'frozenset' else set()
 

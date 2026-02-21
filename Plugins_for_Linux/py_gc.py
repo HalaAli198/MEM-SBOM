@@ -78,7 +78,8 @@ INTERP_GC_OFFSETS = {
 # Position of interpreter_state.gc within _Py_DebugOffsets:
 DEBUG_OFFSETS_GC_FIELD_POS = {
     (3, 13): 80,   # 0x50
-    (3, 14): 88,   # 0x58
+    #(3, 14): 88,   # 0x58
+    (3, 14): 72,   # 0x48
 }
 DEBUG_OFFSETS_GC_FIELD_POS_DEFAULT = 88 
 
@@ -94,31 +95,31 @@ DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 SYMBOL_TABLE_REGISTRY = {
     (3, 6): (
         'volatility3.framework.symbols.generic.types.python.python36_handler',
-        'Python_3_6_15_IntermedSymbols',
+        'Python_3_6_IntermedSymbols',
         'generic/types/python',
         'python36',
     ),
     (3, 7): (
         'volatility3.framework.symbols.generic.types.python.python37_handler',
-        'Python_3_7_17_IntermedSymbols',
+        'Python_3_7_IntermedSymbols',
         'generic/types/python',
         'python37',
     ),
     (3, 8): (
         'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'Python_3_8_IntermedSymbols',
         'generic/types/python',
         'python38',
     ),
     (3, 9): (
-        'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'volatility3.framework.symbols.generic.types.python.python39_handler',
+        'Python_3_9_IntermedSymbols',
         'generic/types/python',
         'python39',
     ),
     (3, 10): (
-        'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_18_IntermedSymbols',
+        'volatility3.framework.symbols.generic.types.python.python310_handler',
+        'Python_3_10_IntermedSymbols',
         'generic/types/python',
         'python310',
     ),
@@ -135,7 +136,7 @@ SYMBOL_TABLE_REGISTRY = {
         'python312',
     ),
     (3, 13): (
-        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'volatility3.framework.symbols.generic.types.python.python313_handler',
         'Python_3_12_IntermedSymbols',
         'generic/types/python',
         'python313',

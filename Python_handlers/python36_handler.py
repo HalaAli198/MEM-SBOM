@@ -14,7 +14,7 @@ import io
 Py_TPFLAGS_HEAPTYPE = 1 << 9
 
 
-class Python_3_6_15_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_6_IntermedSymbols(intermed.IntermediateSymbolTable):
     """
     Python 3.6.15 memory structure handler for Volatility 3.
     
@@ -1572,7 +1572,7 @@ class PyASCIIObject(PyObject):
         # But the actual offset depends on the ISF. Let's use relative offset 32 
         # since ob_base in the ISF might be different.
         # Reading from the struct offset for the state field
-        state_val = int.from_bytes(curr_layer.read(self.vol.offset + 48, 4), 'little')
+        state_val = int.from_bytes(curr_layer.read(self.vol.offset + 32, 4), 'little')
         COMPACT = (state_val >> 5) & 1
         ASCII = (state_val >> 6) & 1
         KIND = (state_val >> 2) & 0b111
@@ -1913,7 +1913,7 @@ class PySetObject(PyObject):
         symbol_table_name = self.get_symbol_table_name()
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
 
         if self.used == 0:
             return frozenset() if set_type_name == 'frozenset' else set()
