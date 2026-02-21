@@ -247,6 +247,28 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         print("  WARNING: sys module not found in extracted modules")
         return None
 
+    def group_modules_by_parent(self, all_modules):
+      """
+      Group modules by their top-level parent.
+      e.g. json.decoder, json.encoder, json.scanner → json
+         collections.abc → collections
+         sqlite3.dbapi2 → sqlite3
+    
+      Returns: {parent_name: [(addr, name, sources, pid, comm, mod_obj), ...]}
+      """
+      groups = {}
+
+      for mod_tuple in all_modules:
+        addr, name, sources, pid, comm, mod_obj = mod_tuple
+        # Get top-level parent: first component before '.'
+        parent = name.split('.')[0]
+
+        if parent not in groups:
+            groups[parent] = []
+        groups[parent].append(mod_tuple)
+
+      return groups
+    
     # ------------------------------------------------------------------
     # Main logic
     # ------------------------------------------------------------------
@@ -292,6 +314,30 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
                     deduped.append((pkg_name, pkg_version, source_path))
             installed_packages = sorted(deduped, key=lambda x: x[0].lower())
 
+        
+        # ----------------------------------------------------------
+        # Step 3: Group modules by parent
+        # ----------------------------------------------------------
+        print(f"\n{'='*60}")
+        print("MODULE GROUPING BY PARENT")
+        print(f"{'='*60}")
+
+        grouped = self.group_modules_by_parent(all_modules)
+
+        for parent in sorted(grouped.keys()):
+            children = grouped[parent]
+            if len(children) == 1 and children[0][1] == parent:
+                # Standalone module, no sub-modules
+                print(f"  {parent}")
+            else:
+                child_names = sorted([c[1] for c in children])
+                print(f"  {parent}")
+                for child in child_names:
+                    if child != parent:
+                        print(f"    └─ {child}")
+
+        print(f"\n  Top-level modules: {len(grouped)}")
+        print(f"  Total modules:     {len(all_modules)}")
         # ----------------------------------------------------------
         # Print results
         # ----------------------------------------------------------
