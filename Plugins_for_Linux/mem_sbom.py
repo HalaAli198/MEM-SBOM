@@ -323,7 +323,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         print(f"{'='*60}")
 
         grouped = self.group_modules_by_parent(all_modules)
-
+        '''
         for parent in sorted(grouped.keys()):
             children = grouped[parent]
             if len(children) == 1 and children[0][1] == parent:
@@ -338,20 +338,72 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
 
         print(f"\n  Top-level modules: {len(grouped)}")
         print(f"  Total modules:     {len(all_modules)}")
+        '''
         # ----------------------------------------------------------
-        # Print results
+        # Step 3: Classify parent modules
+        # ----------------------------------------------------------
+        print(f"\n{'='*60}")
+        print("STEP 3: Module classification")
+        print(f"{'='*60}")
+
+        from volatility3.plugins.linux.module_classifier import Module_Classifier
+
+        classifier = Module_Classifier()
+        classified = {
+            'application': {},
+            'internal': {},
+            'stdlib': {},
+            'third-party': {},
+        }
+
+        for parent, entries in grouped.items():
+            # Find the actual parent entry for path extraction
+            parent_entry = None
+            for entry in entries:
+                if entry[1] == parent:
+                    parent_entry = entry
+                    break
+            if parent_entry is None:
+                parent_entry = entries[0]
+
+            module_path = classifier._extract_path(parent_entry[5])
+            category = classifier.classify(parent, module_path)
+            classified[category][parent] = entries
+
+        # Print application + third-party with their children
+        for category in ('application', 'third-party'):
+            groups = classified[category]
+            if not groups:
+                continue
+            total = sum(len(v) for v in groups.values())
+            print(f"\n  {category.upper()} ({total} modules, {len(groups)} top-level)")
+            print(f"  {'-'*50}")
+            for parent in sorted(groups.keys()):
+                children = groups[parent]
+                child_names = sorted([c[1] for c in children if c[1] != parent])
+                if child_names:
+                    print(f"    {parent}")
+                    for child in child_names:
+                        print(f"      └─ {child}")
+                else:
+                    print(f"    {parent}")
+
+        # Summary
+        print(f"\n  {'─'*40}")
+        for cat in ('application', 'internal', 'stdlib', 'third-party'):
+            count = sum(len(v) for v in classified[cat].values())
+            parents = len(classified[cat])
+            print(f"  {cat:14s}: {count:3d} modules ({parents} top-level)")
+        
+        
+        #----------------------------------------------------------
+        # Print installed packages
         # ----------------------------------------------------------
         print(f"\n{'='*60}")
         print(f"INSTALLED PACKAGES from path_importer_cache ({len(installed_packages)})")
         print(f"{'='*60}")
         for pkg_name, pkg_version, source_path in installed_packages:
             print(f"  {pkg_name:40s}  {pkg_version:15s}  {source_path}")
-
-        print(f"\n{'='*60}")
-        print(f"LOADED MODULES from memory ({len(all_modules)})")
-        print(f"{'='*60}")
-        for addr, name, sources, pid, comm, mod_obj in sorted(all_modules, key=lambda x: x[1]):
-            print(f"  {name:40s}  [{sources:12s}]  PID {pid} ({comm})")
 
         print(f"\n{'='*60}")
         print("SUMMARY")
