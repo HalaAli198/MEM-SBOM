@@ -117,6 +117,10 @@ class Module_Classifier:
             'importlib.', 'ctypes.', 'sqlite3.', 'curses.',
             'distutils.', 'dbm.', 'lib2to3.', 'tkinter.',
             'asyncio.', 'test.', 'idlelib.', 'wsgiref.',
+            're.',        # re._compiler, re._parser, re._constants (3.13+)
+            'os.',        # os.path etc.
+            'io.',        # io.BufferedReader etc.
+            'stat.',      # stat sub-modules
         ]
 
         # Patterns that indicate internal/infrastructure modules

@@ -197,7 +197,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         if 'site-packages' not in key and 'dist-packages' not in key:
             continue
 
-        print(f"  Scanning: {key}")
+        #print(f"  Scanning: {key}")
 
         try:
             finder_dict = value.get_value()
@@ -212,7 +212,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
             for pkg_name, pkg_version in packages:
                 all_packages.append((pkg_name, pkg_version, key))
 
-            print(f"    Found {len(packages)} packages")
+            #print(f"    Found {len(packages)} packages")
 
         except Exception as e:
             print(f"    Error processing {key}: {e}")
@@ -303,18 +303,18 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         installed_packages = []
         if sys_dict:
             installed_packages = self.extract_installed_packages(sys_dict)
-
-            # Dedup by normalized (name, version)
-            seen = set()
-            deduped = []
-            for pkg_name, pkg_version, source_path in installed_packages:
-                key = (pkg_name.lower().replace('-', '_'), pkg_version)
-                if key not in seen:
-                    seen.add(key)
-                    deduped.append((pkg_name, pkg_version, source_path))
-            installed_packages = sorted(deduped, key=lambda x: x[0].lower())
-
         
+        print(f"\n{'='*60}")
+        print(f"INSTALLED PACKAGES from path_importer_cache ({len(installed_packages)})")
+        print(f"{'='*60}")
+        for pkg_name, pkg_version, source_path in installed_packages:
+            print(f"  {pkg_name:40s}  {pkg_version:15s}  {source_path}")
+
+        print(f"\n{'='*60}")
+        print("SUMMARY")
+        print(f"{'='*60}")
+        #print(f"  Loaded modules (from memory):     {len(all_modules)}")
+        print(f"  Installed packages (from cache):   {len(installed_packages)}")
         # ----------------------------------------------------------
         # Step 3: Group modules by parent
         # ----------------------------------------------------------
@@ -369,47 +369,299 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
             module_path = classifier._extract_path(parent_entry[5])
             category = classifier.classify(parent, module_path)
             classified[category][parent] = entries
-
-        # Print application + third-party with their children
-        for category in ('application', 'third-party'):
-            groups = classified[category]
-            if not groups:
-                continue
-            total = sum(len(v) for v in groups.values())
-            print(f"\n  {category.upper()} ({total} modules, {len(groups)} top-level)")
-            print(f"  {'-'*50}")
-            for parent in sorted(groups.keys()):
-                children = groups[parent]
-                child_names = sorted([c[1] for c in children if c[1] != parent])
-                if child_names:
-                    print(f"    {parent}")
-                    for child in child_names:
-                        print(f"      └─ {child}")
-                else:
-                    print(f"    {parent}")
-
-        # Summary
-        print(f"\n  {'─'*40}")
-        for cat in ('application', 'internal', 'stdlib', 'third-party'):
-            count = sum(len(v) for v in classified[cat].values())
-            parents = len(classified[cat])
-            print(f"  {cat:14s}: {count:3d} modules ({parents} top-level)")
+        module_class_map = {}  # module_name → classification
+        for category, groups in classified.items():
+            for parent, entries in groups.items():
+                module_class_map[parent] = category
+                #for entry in entries:
+                    #module_class_map[entry[1]] = category
+                  
+         
+        # Print the map
+        print(f"\n{'='*60}")
+        print(f"MODULE → CLASSIFICATION MAP ({len(module_class_map)} entries)")
+        print(f"{'='*60}")
+        for mod_name in sorted(module_class_map.keys()):
+            print(f"  {mod_name:40s}  →  {module_class_map[mod_name]}")
         
         
-        #----------------------------------------------------------
-        # Print installed packages
+        # ----------------------------------------------------------
+        # Step 4: Extract version info for application + third-party
         # ----------------------------------------------------------
         print(f"\n{'='*60}")
-        print(f"INSTALLED PACKAGES from path_importer_cache ({len(installed_packages)})")
+        print("STEP 4: Extracting version info")
         print(f"{'='*60}")
-        for pkg_name, pkg_version, source_path in installed_packages:
-            print(f"  {pkg_name:40s}  {pkg_version:15s}  {source_path}")
 
+        package_versions = {}  # parent_name → (version, path)
+
+        for category in ('application', 'third-party'):
+            for parent, entries in classified[category].items():
+                # Find the parent module entry
+                parent_entry = None
+                for entry in entries:
+                    if entry[1] == parent:
+                        parent_entry = entry
+                        break
+                if parent_entry is None:
+                    parent_entry = entries[0]
+
+                mod_obj = parent_entry[5]
+                mod_version = "unknown"
+                mod_path = "None"
+
+                try:
+                    module_obj = mod_obj.cast_to("PyModuleObject")
+                    mod_dict = module_obj.get_dict2()
+                    #print(mod_dict)
+                    print("------------------------------------------------")
+                    # --- Extract version ---
+                    version_attrs = [
+                        '__version__', 'VERSION', '__VERSION__',
+                        '_version', 'version_short', 'version_info',
+                        '__version_info__', 'VERSION_INFO',
+                        '__VERSION_INFO__', 'version',
+                    ]
+                    # --- Extract version from parent dict ---
+                    for attr in version_attrs:
+                        if attr not in mod_dict:
+                            continue
+                        val = mod_dict[attr]
+                        val_type = val.ob_type.dereference().get_name()
+                        #print(f"val_type: {val_type}")
+
+                        if val_type == "str":
+                            mod_version = val.get_value()
+                            break
+                        elif val_type == "tuple":
+                            try:
+                                version_tuple = val.get_value()
+                                parts = []
+                                for obj in version_tuple[:3]:
+                                    try:
+                                        parts.append(str(obj.get_value()))
+                                    except:
+                                        break
+                                if parts and any(p.lower() != 'none' for p in parts):
+                                    mod_version = '.'.join(parts)
+                                    break
+                            except:
+                                continue
+                        elif val_type == "module":
+                            # Version is a sub-module (e.g. pkg.version)
+                            try:
+                                ver_mod = val.cast_to("PyModuleObject")
+                                ver_dict = ver_mod.get_dict2()
+                                for attr2 in version_attrs:
+                                    if attr2 in ver_dict:
+                                        if self.get_value_type(ver_dict[attr2]) == "str":
+                                            mod_version = ver_dict[attr2].get_value()
+                                            break
+                                if mod_version != "unknown":
+                                    break
+                            except:
+                                continue
+
+                    # --- Fallback: check children for version ---
+                    if mod_version == "unknown":
+                        for entry in entries:
+                            if entry[1] == parent:
+                                continue  # already checked
+                            try:
+                                child_mod = entry[5].cast_to("PyModuleObject")
+                                child_dict = child_mod.get_dict2()
+                                for attr in version_attrs:
+                                    if attr not in child_dict:
+                                        continue
+                                    val = child_dict[attr]
+                                    try:
+                                        val_type = val.ob_type.dereference().get_name()
+                                    except:
+                                        continue
+                                    if val_type == "str":
+                                        mod_version = val.get_value()
+                                        print(f"    version from child {entry[1]}: {mod_version}")
+                                        break
+                                if mod_version != "unknown":
+                                    break
+                            except:
+                                continue
+                    
+                    # --- Extract path ---
+                    if '__file__' in mod_dict:
+                        try:
+                            mod_path = mod_dict['__file__'].get_value()
+                        except:
+                            pass
+                    elif '__path__' in mod_dict:
+                        try:
+                            mod_path = str(mod_dict['__path__'].get_value())
+                        except:
+                            pass
+
+                except Exception as e:
+                    print(f"  Error reading {parent}: {e}")
+
+                package_versions[parent] = (mod_version, mod_path, category)
+                print(f"  {parent:30s}  {mod_version:15s}  {category}")
+                
+        # ----------------------------------------------------------
+        # Step 5: Resolve pip names → import names via PyPI
+        # ----------------------------------------------------------
         print(f"\n{'='*60}")
-        print("SUMMARY")
+        print("STEP 5: Resolving package → import name mappings via PyPI")
         print(f"{'='*60}")
-        print(f"  Loaded modules (from memory):     {len(all_modules)}")
-        print(f"  Installed packages (from cache):   {len(installed_packages)}")
+
+        import requests
+        import zipfile
+        import tarfile
+        import io
+
+        # {pip_name: {'imports': [import_names], 'version': str}}
+        pip_import_map = {}
+        skip_packages = {'pkg_resources', 'pip', 'setuptools', 'wheel', '_distutils_hack'}
+        for pkg_name, pkg_version, source_path in installed_packages:
+            if pkg_name.lower() in skip_packages:
+                print(f"  {pkg_name}: skipped (packaging infrastructure)")
+                continue 
+            import_names = set()
+
+            try:
+                resp = requests.get(
+                    f"https://pypi.org/pypi/{pkg_name}/json", timeout=5
+                )
+                if resp.status_code != 200:
+                    print(f"  {pkg_name}: PyPI returned {resp.status_code}")
+                    pip_import_map[pkg_name] = {
+                        'imports': [pkg_name.lower().replace('-', '_')],
+                        'version': pkg_version,
+                    }
+                    continue
+
+                data = resp.json()
+                urls = data.get('urls', [])
+                if not urls and 'releases' in data:
+                    latest = data['info'].get('version')
+                    if latest and latest in data['releases']:
+                        urls = data['releases'][latest]
+
+                # Find wheel and sdist URLs
+                wheel_url = None
+                sdist_url = None
+                for u in urls:
+                    if u.get('packagetype') == 'bdist_wheel' and not wheel_url:
+                        wheel_url = u['url']
+                    elif u.get('packagetype') == 'sdist' and not sdist_url:
+                        sdist_url = u['url']
+
+                ignore = {
+                    'tests', 'test', 'docs', 'examples', 'example',
+                    'scripts', 'benchmarks', 'samples', 'tools',
+                    'bin', 'conf', 'etc',
+                }
+
+                # --- Try wheel first ---
+                if wheel_url:
+                    whl_resp = requests.get(wheel_url, timeout=10)
+                    whl = zipfile.ZipFile(io.BytesIO(whl_resp.content))
+
+                    # 1) top_level.txt
+                    for fname in whl.namelist():
+                        if fname.endswith('top_level.txt'):
+                            content = whl.read(fname).decode('utf-8')
+                            import_names = {
+                                line.strip()
+                                for line in content.splitlines()
+                                if line.strip()
+                            }
+                            break
+
+                    # 2) Infer from wheel structure
+                    if not import_names:
+                        for fname in whl.namelist():
+                            # Skip dist-info metadata directories
+                            if '.dist-info/' in fname:
+                                continue
+                            # Package dirs: bs4/__init__.py
+                            if fname.count('/') == 1 and fname.endswith('/__init__.py'):
+                                candidate = fname.split('/')[0]
+                                if candidate not in ignore and not candidate.startswith('.'):
+                                    import_names.add(candidate)
+                            # Single-module files: foobar.py
+                            elif fname.count('/') == 0 and fname.endswith('.py'):
+                                candidate = fname[:-3]
+                                if candidate not in ignore and not candidate.startswith('.'):
+                                    import_names.add(candidate)
+
+                # --- Fallback to sdist ---
+                elif sdist_url:
+                    try:
+                        sdist_resp = requests.get(sdist_url, timeout=10)
+                        with tarfile.open(
+                            fileobj=io.BytesIO(sdist_resp.content), mode='r:gz'
+                        ) as tar:
+                            for member in tar.getmembers():
+                                # top_level.txt inside .egg-info
+                                if '.egg-info/top_level.txt' in member.name:
+                                    content = tar.extractfile(member).read().decode('utf-8')
+                                    import_names = {
+                                        line.strip()
+                                        for line in content.splitlines()
+                                        if line.strip()
+                                    }
+                                    break
+
+                            # Infer from sdist directory structure
+                            if not import_names:
+                                for member in tar.getmembers():
+                                    if not member.isdir():
+                                        continue
+                                    parts = member.name.split('/')
+                                    # Top-level dir after the package root dir
+                                    if len(parts) == 2:
+                                        candidate = parts[1]
+                                        if (candidate not in ignore
+                                                and not candidate.startswith('.')
+                                                and not candidate.endswith('.egg-info')):
+                                            import_names.add(candidate)
+                    except Exception as e:
+                        print(f"  {pkg_name}: sdist error - {e}")
+
+            except Exception as e:
+                print(f"  {pkg_name}: error - {e}")
+
+            # Fallback: normalize pip name as import name
+            if not import_names:
+                import_names = {pkg_name.lower().replace('-', '_')}
+
+            pip_import_map[pkg_name] = {
+                'imports': sorted(import_names),
+                'version': pkg_version,
+            }
+            print(f"  {pkg_name:30s} {pkg_version:10s} → {sorted(import_names)}")
+
+        print(f"\n  Resolved {len(pip_import_map)} packages")
+        
+        # ----------------------------------------------------------
+        # Step 6: Fill unknown versions from pip_import_map
+        # ----------------------------------------------------------
+        print(f"\n{'='*60}")
+        print("STEP 6: Resolving unknown versions from installed packages")
+        print(f"{'='*60}")
+
+        for parent, (version, path, category) in package_versions.items():
+            if version != "unknown":
+                continue
+
+            # Check if this module name appears in any package's import list
+            for pip_name, info in pip_import_map.items():
+                if parent in info['imports']:
+                    old_version = version
+                    package_versions[parent] = (info['version'], path, category)
+                    print(f"  {parent:30s}  {info['version']:15s}  (from {pip_name})")
+                    break
+            else:
+                print(f"  {parent:30s}  still unknown")
+        
 
         return all_modules, installed_packages
 
