@@ -506,7 +506,7 @@ class PyBytesObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=10, visited=None):
         try:
             curr_layer = self._context.layers[self.vol.layer_name]
-            ob_size = self.ob_size
+            ob_size = self.ob_base.ob_size
             base_offset = self.vol.offset + self.vol.size - 8
             try:
                 byte_data = curr_layer.read(base_offset, ob_size, pad=False)

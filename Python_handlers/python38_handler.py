@@ -532,7 +532,7 @@ class PyBytesObject(PyObject):
             curr_layer = self._context.layers[self.vol.layer_name]
             
             # Get the size of the bytes object
-            ob_size = self.ob_size
+            ob_size = self.ob_base.ob_size
             
             # Calculate the correct data offset
             # The bytes data starts after the PyBytesObject structure (40 bytes)

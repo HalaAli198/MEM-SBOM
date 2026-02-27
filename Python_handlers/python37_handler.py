@@ -495,7 +495,7 @@ class PyBytesObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=10, visited=None):
         try:
             curr_layer = self._context.layers[self.vol.layer_name]
-            ob_size = self.ob_size
+            ob_size = self.ob_base.ob_size
             base_offset = self.vol.offset + self.vol.size - 8
             try:
                 byte_data = curr_layer.read(base_offset, ob_size, pad=False)
@@ -1902,7 +1902,7 @@ class PySetObject(PyObject):
         symbol_table_name = self.get_symbol_table_name()
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
 
         if self.used == 0:
             return frozenset() if set_type_name == 'frozenset' else set()
@@ -1944,7 +1944,6 @@ class PySetObject(PyObject):
                 return set(hashed_values)
             except TypeError:
                 return set(str(val) for val in hashed_values)
-
 
 # =============================================================================
 # Function - KEY DIFFERENCE: no vectorcall in 3.6

@@ -140,11 +140,9 @@ _OPCODES_313 = {
     171: 'CALL',
 }
 
-# 3.14–3.16: assume same as 3.13 unless we discover otherwise
+# 3.14–3.15: assume same as 3.13 unless we discover otherwise
 _OPCODES_314 = dict(_OPCODES_313)
 _OPCODES_315 = dict(_OPCODES_313)
-_OPCODES_316 = dict(_OPCODES_313)
-
 
 def _build_opcode_table(version: Tuple[int, int]) -> Dict[int, str]:
     """Return the opcode number→name mapping for the given Python version."""
@@ -166,8 +164,6 @@ def _build_opcode_table(version: Tuple[int, int]) -> Dict[int, str]:
         return dict(_OPCODES_314)
     elif minor == 15:
         return dict(_OPCODES_315)
-    elif minor >= 16:
-        return dict(_OPCODES_316)
     else:
         # Fallback: use 3.8 table
         table = dict(_OPCODES_36_TO_310)
