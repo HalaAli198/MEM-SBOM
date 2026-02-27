@@ -112,6 +112,12 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
                 default=False,
                 optional=True,
             ),
+            requirements.BooleanRequirement(
+                name="dep",
+                description="Generate dependency graph",
+                default=False,
+                optional=True,
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -663,7 +669,28 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
                 print(f"  {parent:30s}  still unknown")
         
 
-        return all_modules, installed_packages
+        
+        # ----------------------------------------------------------
+        # Step 7: Generate dependency graph
+        # ----------------------------------------------------------
+        dep_graph={}
+        if self.config.get('dep', False):
+          from volatility3.plugins.linux.dependency_generator import Dependency_Generator
+          print(f"\n{'='*60}")
+          print("STEP 7: Generating dependency graph")
+          print(f"{'='*60}")
+        
+          dep_gen = Dependency_Generator()
+          dep_graph = dep_gen.build_dependency_graph(classified, grouped)
+
+          print(f"\n{'='*60}")
+          print(f"DEPENDENCY GRAPH ({len(dep_graph)} modules)")
+          print(f"{'='*60}")
+          for parent in sorted(dep_graph.keys()):
+              deps = dep_graph[parent]
+              print(f"  {parent} → [{', '.join(deps)}]")
+
+          return all_modules, installed_packages, dep_graph
 
     # ------------------------------------------------------------------
     # Volatility renderer
@@ -677,7 +704,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
             ))
 
     def run(self):
-        all_modules, installed_packages = self._collect_all()
+        all_modules, installed_packages, dep_graph = self._collect_all()
 
         return renderers.TreeGrid(
             [
