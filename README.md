@@ -181,7 +181,7 @@ This directory contains the **Windows versions of the MEM-SBOM plugins**.
 - **py_heap.py**  
   Scans process heap memory to identify untracked or hidden Python modules.
 
-- **pe_symbols.py**  
+- **pe_parsing.py**  
   Helper plugin used to locate the `_PyRuntime` symbol inside PE binaries during analysis.
 
 
