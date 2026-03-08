@@ -132,26 +132,15 @@ The repository is organized into several directories that contain the MEM-SBOM p
   Handles CPython bytecode decoding across multiple Python versions.
 
 ## Python_handlers
-- python36_handler.py
-- python37_handler.py
-- python38_handler.py
-- python39_handler.py
-- python310_handler.py
-- python311_handler.py
-- python312_handler.py
-- python313_handler.py
-- python314_handler.py
+Per-version memory structure definitions for CPython 3.6–3.14.
+Each handler defines how to read and interpret CPython internal structs
+(PyDictObject, PyCodeObject, PyGC_Head, etc.) from raw process memory.
 
-## Symbol_Tables
-- python36.json
-- python37.json
-- python38.json
-- python39.json
-- python310.json
-- python311.json
-- python312.json
-- python313.json
-- python314.json
+
+## Symbol_Tables 
+ISF JSON files generated from CPython debug symbols via dwarf2json.
+Define the struct layouts (field offsets, sizes, types) for each CPython
+version's internal objects (PyObject, PyInterpreterState, PyCodeObject, etc.).
 
 ## Linux_Plugins
 This directory contains the **Volatility 3 plugins for Linux memory analysis**.  
