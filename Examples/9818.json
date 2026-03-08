@@ -1,0 +1,694 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:9c232b47-d9f1-45d1-9752-9225ae21bc24",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-03-08T17:03:40.408360Z",
+    "tools": [
+      {
+        "name": "MEM-SBOM",
+        "version": "1.0.0"
+      }
+    ],
+    "component": {
+      "type": "application",
+      "name": "python",
+      "description": "Python application analyzed from memory dump"
+    },
+    "properties": [
+      {
+        "name": "extraction_method",
+        "value": "memory_analysis"
+      },
+      {
+        "name": "total_components",
+        "value": "19"
+      },
+      {
+        "name": "dependency_graph_enabled",
+        "value": "True"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "__main__-0_0_0",
+      "name": "__main__",
+      "version": "0.0.0",
+      "purl": "pkg:pypi/--main--",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "application"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "version_detection",
+          "value": "failed"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "celery-5_5_3",
+      "name": "celery",
+      "version": "5.5.3",
+      "purl": "pkg:pypi/celery@5.5.3",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/celery/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/celery/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "kombu-5_5_4",
+      "name": "kombu",
+      "version": "5.5.4",
+      "purl": "pkg:pypi/kombu@5.5.4",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/kombu/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/kombu/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "amqp-5_3_1",
+      "name": "amqp",
+      "version": "5.3.1",
+      "purl": "pkg:pypi/amqp@5.3.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/amqp/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/amqp/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "vine-5_1_0",
+      "name": "vine",
+      "version": "5.1.0",
+      "purl": "pkg:pypi/vine@5.1.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/vine/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/vine/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "billiard-4_2_1",
+      "name": "billiard",
+      "version": "4.2.1",
+      "purl": "pkg:pypi/billiard@4.2.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/billiard/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/billiard/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "click-8_1_8",
+      "name": "click",
+      "version": "8.1.8",
+      "purl": "pkg:pypi/click@8.1.8",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "dateutil-2_9_0_post0",
+      "name": "dateutil",
+      "version": "2.9.0.post0",
+      "purl": "pkg:pypi/dateutil@2.9.0.post0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/dateutil/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/dateutil/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "six-1_17_0",
+      "name": "six",
+      "version": "1.17.0",
+      "purl": "pkg:pypi/six@1.17.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/six.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/six.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "backports-0_2_1",
+      "name": "backports",
+      "version": "0.2.1",
+      "purl": "pkg:pypi/backports@0.2.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/backports/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/backports/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "click_didyoumean-0_3_1",
+      "name": "click_didyoumean",
+      "version": "0.3.1",
+      "purl": "pkg:pypi/click-didyoumean@0.3.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_didyoumean/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_didyoumean/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "click_plugins-1_1_1_2",
+      "name": "click_plugins",
+      "version": "1.1.1.2",
+      "purl": "pkg:pypi/click-plugins@1.1.1.2",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_plugins/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_plugins/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "prompt_toolkit-3_0_51",
+      "name": "prompt_toolkit",
+      "version": "3.0.51",
+      "purl": "pkg:pypi/prompt-toolkit@3.0.51",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/prompt_toolkit/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/prompt_toolkit/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "wcwidth-0_2_13",
+      "name": "wcwidth",
+      "version": "0.2.13",
+      "purl": "pkg:pypi/wcwidth@0.2.13",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/wcwidth/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/wcwidth/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "click_repl-0_3_0",
+      "name": "click_repl",
+      "version": "0.3.0",
+      "purl": "pkg:pypi/click-repl@0.3.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_repl/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/click_repl/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "packaging-25_0",
+      "name": "packaging",
+      "version": "25.0",
+      "purl": "pkg:pypi/packaging@25.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/packaging/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/packaging/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "async_timeout-5_0_1",
+      "name": "async_timeout",
+      "version": "5.0.1",
+      "purl": "pkg:pypi/async-timeout@5.0.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/async_timeout/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/async_timeout/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "redis-5_3_1",
+      "name": "redis",
+      "version": "5.3.1",
+      "purl": "pkg:pypi/redis@5.3.1",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/redis/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/redis/__init__.py"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
+      "bom-ref": "jwt-2_9_0",
+      "name": "jwt",
+      "version": "2.9.0",
+      "purl": "pkg:pypi/jwt@2.9.0",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "classification",
+          "value": "third-party"
+        },
+        {
+          "name": "extracted_from",
+          "value": "memory"
+        },
+        {
+          "name": "file_path",
+          "value": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/jwt/__init__.py"
+        }
+      ],
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "/home/hala/SBOM_Projects/celery/celery_venv/lib/python3.8/site-packages/jwt/__init__.py"
+          }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "__main__-0_0_0",
+      "dependsOn": [
+        "celery-5_5_3",
+        "kombu-5_5_4",
+        "vine-5_1_0"
+      ]
+    },
+    {
+      "ref": "celery-5_5_3",
+      "dependsOn": [
+        "amqp-5_3_1",
+        "billiard-4_2_1",
+        "click-8_1_8",
+        "click_plugins-1_1_1_2",
+        "click_repl-0_3_0",
+        "dateutil-2_9_0_post0",
+        "kombu-5_5_4",
+        "six-1_17_0",
+        "vine-5_1_0"
+      ]
+    },
+    {
+      "ref": "kombu-5_5_4",
+      "dependsOn": [
+        "amqp-5_3_1",
+        "packaging-25_0",
+        "redis-5_3_1",
+        "vine-5_1_0"
+      ]
+    },
+    {
+      "ref": "amqp-5_3_1",
+      "dependsOn": [
+        "vine-5_1_0"
+      ]
+    },
+    {
+      "ref": "vine-5_1_0",
+      "dependsOn": []
+    },
+    {
+      "ref": "billiard-4_2_1",
+      "dependsOn": [
+        "kombu-5_5_4"
+      ]
+    },
+    {
+      "ref": "click-8_1_8",
+      "dependsOn": []
+    },
+    {
+      "ref": "dateutil-2_9_0_post0",
+      "dependsOn": [
+        "six-1_17_0"
+      ]
+    },
+    {
+      "ref": "six-1_17_0",
+      "dependsOn": []
+    },
+    {
+      "ref": "backports-0_2_1",
+      "dependsOn": []
+    },
+    {
+      "ref": "click_didyoumean-0_3_1",
+      "dependsOn": [
+        "click-8_1_8"
+      ]
+    },
+    {
+      "ref": "click_plugins-1_1_1_2",
+      "dependsOn": [
+        "click-8_1_8"
+      ]
+    },
+    {
+      "ref": "prompt_toolkit-3_0_51",
+      "dependsOn": []
+    },
+    {
+      "ref": "wcwidth-0_2_13",
+      "dependsOn": []
+    },
+    {
+      "ref": "click_repl-0_3_0",
+      "dependsOn": [
+        "click-8_1_8",
+        "prompt_toolkit-3_0_51"
+      ]
+    },
+    {
+      "ref": "packaging-25_0",
+      "dependsOn": []
+    },
+    {
+      "ref": "async_timeout-5_0_1",
+      "dependsOn": []
+    },
+    {
+      "ref": "redis-5_3_1",
+      "dependsOn": [
+        "async_timeout-5_0_1",
+        "jwt-2_9_0"
+      ]
+    },
+    {
+      "ref": "jwt-2_9_0",
+      "dependsOn": []
+    }
+  ],
+  "vulnerabilities": []
+}

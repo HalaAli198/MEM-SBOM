@@ -1,3 +1,18 @@
+# Python 3.14 strctures handler.
+#
+# Maps CPython 3.14 internal structs to Volatility StructType handlers
+# for extracting Python objects from memory dumps.
+#
+# Notable differences from pre-3.11:
+#   - co_code pointer gone, bytecode is inline (co_code_adaptive)
+#   - co_varnames/co_cellvars/co_freevars merged into co_localsplusnames
+#   - dict keys use dk_log2_size + dk_kind instead of dk_size
+#   - int sign stored in lv_tag, not ob_size
+#   - string struct sizes changed (40B ASCII, 56B compact)
+#
+# Offsets come from the symbol table JSON, not hardcoded.
+
+
 from volatility3.framework.symbols import intermed
 from volatility3.framework import objects, constants
 from volatility3.framework import exceptions
@@ -1360,7 +1375,7 @@ class PyCodeObject(PyObject):
         try:
             curr_layer = self._context.layers[self.vol.layer_name]
             # co_code_adaptive is at offset 184 in 3.11
-            code_start = self.vol.offset + 184
+            code_start = self.vol.offset + self.vol.members['co_code_adaptive'][0]
             ob_size = self.ob_base.ob_size
             if ob_size > 0 and ob_size < 65536:
                 return curr_layer.read(code_start, ob_size * 2)

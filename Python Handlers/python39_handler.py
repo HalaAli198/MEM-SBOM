@@ -13,7 +13,7 @@ from decompyle3.main import decompile_file, decompile
 from io import StringIO
 import io
 Py_TPFLAGS_HEAPTYPE = 1 << 9 
-class Python_3_8_18_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_9_IntermedSymbols(intermed.IntermediateSymbolTable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -532,7 +532,7 @@ class PyBytesObject(PyObject):
             curr_layer = self._context.layers[self.vol.layer_name]
             
             # Get the size of the bytes object
-            ob_size = self.ob_size
+            ob_size = self.ob_base.ob_size
             
             # Calculate the correct data offset
             # The bytes data starts after the PyBytesObject structure (40 bytes)
@@ -2052,7 +2052,7 @@ class PySetObject(PyObject):
         curr_layer = self._context.layers[self.vol.layer_name]
         data_offset = self.table
 
-        set_type_name = self.HEAD.ob_type.dereference().get_name()
+        set_type_name = self.ob_base.ob_type.dereference().get_name()
         # Debug log
 
         

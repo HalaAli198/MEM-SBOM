@@ -1,3 +1,20 @@
+#  Python 3.11 strctures handler.
+#
+# Maps CPython 3.11 internal structs to Volatility StructType handlers
+# for extracting Python objects from memory dumps.
+#
+# 3.11 was the first major internal restructuring:
+#   - co_code pointer gone, bytecode is inline (co_code_adaptive)
+#   - co_varnames/co_cellvars/co_freevars merged into co_localsplusnames
+#   - dict keys use dk_log2_size + dk_kind instead of dk_size
+#   - PyFrameObject is now a thin wrapper around _PyInterpreterFrame
+#   - PyFunctionObject fields reordered, func_qualname/func_version added
+#
+# Note: PyLongObject here still uses the pre-3.12 ob_size sign encoding.
+# The lv_tag change happened in 3.12.
+#
+# Offsets come from the symbol table JSON, not hardcoded.
+
 from volatility3.framework.symbols import intermed
 from volatility3.framework import objects, constants
 from volatility3.framework import exceptions
@@ -18,7 +35,7 @@ DICT_KEYS_UNICODE = 1
 DICT_KEYS_SPLIT = 2
 
 
-class Python_3_13_IntermedSymbols(intermed.IntermediateSymbolTable):
+class Python_3_11_IntermedSymbols(intermed.IntermediateSymbolTable):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -1312,7 +1329,7 @@ class PyASCIIObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=10, visited=None):
         curr_layer = self._context.layers[self.vol.layer_name]
 
-        # state bitfield at offset 32 (same position, but struct is now 40 bytes)
+        # state bitfield at offset 32
         state_val = int.from_bytes(curr_layer.read(self.vol.offset + 32, 4), 'little')
         COMPACT = (state_val >> 5) & 1
         ASCII = (state_val >> 6) & 1
@@ -1321,11 +1338,9 @@ class PyASCIIObject(PyObject):
         length = int(self.length)
 
         if ASCII and COMPACT:
-            # data immediately after struct — now 40 bytes, not 48
             string = curr_layer.read(self.vol.offset + self.vol.size, length, pad=False)
         elif not ASCII and COMPACT:
-            # after PyCompactUnicodeObject — now 56 bytes, not 72
-            string = curr_layer.read(self.vol.offset + 56, length * KIND, pad=False)
+            string = curr_layer.read(self.vol.offset + 72, length * KIND, pad=False)
         else:
             string = curr_layer.read(self.vol.offset + self.vol.size, length, pad=False)
 
@@ -1357,7 +1372,7 @@ class PyCodeObject(PyObject):
         try:
             curr_layer = self._context.layers[self.vol.layer_name]
             # co_code_adaptive is at offset 184 in 3.11
-            code_start = self.vol.offset + 184
+            code_start = self.vol.offset + self.vol.members['co_code_adaptive'][0]
             ob_size = self.ob_base.ob_size
             if ob_size > 0 and ob_size < 65536:
                 return curr_layer.read(code_start, ob_size * 2)
@@ -1389,36 +1404,20 @@ class PyCodeObject(PyObject):
 
 
 class PyLongObject(PyObject):
-    # 3.12: ob_size no longer encodes sign. Now uses _PyLongValue.lv_tag:
-    #   lv_tag & 3 == sign (0=positive, 1=zero, 2=negative)
-    #   lv_tag >> 3 == number of digits
+    def get_sign(self, num):
+        return -1 if num < 0 else int(bool(num))
 
     def get_value(self, cur_depth=0, max_depth=5, visited=None):
-        curr_layer = self._context.layers[self.vol.layer_name]
-
-        # lv_tag is at offset 16 (right after PyObject ob_base)
-        lv_tag_bytes = curr_layer.read(self.vol.offset + 16, 8)
-        lv_tag = int.from_bytes(lv_tag_bytes, byteorder='little')
-
-        sign_bits = lv_tag & 0x3
-        ndigits = lv_tag >> 3
-
-        if sign_bits == 1:  # zero
+        sign = self.get_sign(self.VAR_HEAD.ob_size)
+        if sign == 0:
             return 0
+        symbol_table_name = self.get_symbol_table_name()
+        curr_layer = self._context.layers[self.vol.layer_name]
+        addr = self.vol.offset + self._context.symbol_space.get_type(
+            symbol_table_name + constants.BANG + 'PyVarObject').size
+        value = int.from_bytes(curr_layer.read(addr, 4, pad=False), byteorder='little')
+        return sign * value
 
-        # digits start at offset 24 (after ob_base(16) + lv_tag(8))
-        digits_addr = self.vol.offset + 24
-
-        value = 0
-        for i in range(ndigits):
-            digit_bytes = curr_layer.read(digits_addr + i * 4, 4, pad=False)
-            digit = int.from_bytes(digit_bytes, byteorder='little')
-            value |= digit << (30 * i)  # PyLong_SHIFT = 30 on 64-bit
-
-        if sign_bits == 2:  # negative
-            value = -value
-
-        return value
 
 class PyTupleObject(PyObject):
     def get_value(self, cur_depth=0, max_depth=None, visited=None):
