@@ -20,14 +20,11 @@
   - **Version extraction from live objects** 
     Reads __version__, VERSION, version_info and other attributes directly from module dicts in memory, with fallback to installed package metadata
 
-- **Memory-based SBOM generation**  
-    Generates Software Bills of Materials directly from Python process memory rather than relying on package metadata.
+- **Memory-based SBOM generation** Generates Software Bills of Materials directly from Python process memory rather than relying on package metadata.
 
-- **Dependency graph generation**
-   Analyzes function bytecode (IMPORT_NAME, IMPORT_FROM, CALL targets), module dicts, class hierarchies, and func_module pointers to build a complete dependency graph.
+- **Dependency graph generation** Analyzes function bytecode (IMPORT_NAME, IMPORT_FROM, CALL targets), module dicts, class hierarchies, and func_module pointers to build a complete dependency graph.
 
-- **CycloneDX SBOM output**  
-     Produces standards-compliant SBOMs (components, dependency relationships, and memory-extraction provenance) that can be integrated with existing vulnerability and supply-chain analysis tools.
+- **CycloneDX SBOM output**    Produces standards-compliant SBOMs (components, dependency relationships, and memory-extraction provenance) that can be integrated with existing vulnerability and supply-chain analysis tools.
 
 - **Python 3.6–3.14 support**
    Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
