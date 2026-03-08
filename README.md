@@ -82,6 +82,7 @@ https://github.com/volatilityfoundation/volatility3
  #### For Linux Plugins:
    Copy the  plugins and the Core scripts to the Volatility Linux plugin directory (e.g., ```/path/to/volatility3/volatility3/framework/plugins/linux/```).
  #### For Windows Plugins:
+  Copy the  plugins and the Core scripts to the Volatility Windows plugin directory (e.g., ```/path/to/volatility3/volatility3/framework/plugins/windows/```).
    
 
 ---
