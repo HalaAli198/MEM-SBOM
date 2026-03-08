@@ -88,31 +88,35 @@ https://github.com/volatilityfoundation/volatility3
 ---
 
 # Usage
-Generate a full SBOM from a memory dump:
-bashpython3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162
-Generate SBOM with dependency graph:
-bashpython3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
-Speed options — skip slow discovery methods when the interpreter source is sufficient:
-bash# Skip heap scanning (fastest)
-python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap
+### Generate a full SBOM from a memory dump:
+``` python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162```
+### Generate SBOM with dependency graph:
+bash python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
 
-# Skip GC walking
-python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc
+### Skip sournces depends on the investigator's requirments:
+- Skip heap scanning (fastest)
+```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap```
 
-# Interpreter-only (fastest, may miss hidden modules)
-python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc --skip-heap
-Run individual components for targeted analysis:
-bash# Extract all modules across the process tree
-python3 vol.py -f dump.vmem linux.module_extractor.Module_Extractor --pid 22162
+- Skip GC walking
+```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc```
 
-# Walk GC lists for a single process
-python3 vol.py -f dump.vmem linux.py_gc.Py_GC --pid 22162
+- Interpreter-only (fastest, may miss hidden modules)
+```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc --skip-heap```
 
-# Scan heap for hidden/unlinked modules
-python3 vol.py -f dump.vmem linux.py_heap.Py_Heap --pid 22162
+### Run individual components for targeted analysis:
+- Extract all modules across the process tree
+```python3 vol.py -f dump.vmem linux.module_extractor.Module_Extractor --pid 22162```
 
-# Dump interpreter state (sys.modules)
-python3 vol.py -f dump.vmem linux.py_interpreter.Py_Interpreter --pid 22162
+-  Walk GC lists for a single process
+```python3 vol.py -f dump.vmem linux.py_gc.Py_GC --pid 22162```
+
+-  Scan heap for hidden/unlinked modules
+```python3 vol.py -f dump.vmem linux.py_heap.Py_Heap --pid 22162```
+
+-  Dump interpreter state (sys.modules)
+```python3 vol.py -f dump.vmem linux.py_interpreter.Py_Interpreter --pid 22162```
+
+---
 # Repository Structure
 
 The repository is organized into several directories that contain the MEM-SBOM plugins, supporting components, and example outputs.
