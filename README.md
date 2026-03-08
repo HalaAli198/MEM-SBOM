@@ -121,20 +121,6 @@ bash python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
 
 The repository is organized into several directories that contain the MEM-SBOM plugins, supporting components, and example outputs.
 ## Core
-
-## Linux_Plugins
-
-This directory contains the **Volatility 3 plugins for Linux memory analysis**.  
-These plugins implement the MEM-SBOM pipeline and supporting functionality.
-
-Main components include:
-
-- **mem_sbom.py**  
-  Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
-
-- **module_extractor.py**  
-  Discovers Python modules from process memory using multiple sources (GC, interpreter registry, and heap).
-
 - **module_classifier.py**  
   Classifies modules as application, third-party, internal, or standard library.
 
@@ -143,6 +129,41 @@ Main components include:
 
 - **bytecode_decoder.py**  
   Handles CPython bytecode decoding across multiple Python versions.
+
+## Python_handlers
+python36_handler.py
+python37_handler.py
+python38_handler.py
+python39_handler.py
+python310_handler.py
+python311_handler.py
+python312_handler.py
+python313_handler.py
+python314_handler.py
+
+## Symbol_Tables
+python36.json
+python37.json
+python38.json
+python39.json
+python310.json
+python311.json
+python312.json
+python313.json
+python314.json
+
+## Linux_Plugins
+This directory contains the **Volatility 3 plugins for Linux memory analysis**.  
+These plugins implement the MEM-SBOM pipeline and supporting functionality.
+
+### Main components include:
+
+- **mem_sbom.py**  
+  Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
+
+- **module_extractor.py**  
+  Discovers Python modules from process memory using multiple sources (GC, interpreter registry, and heap).
+
 
 - **py_interpreter.py**  
   Extracts modules registered in the interpreter (`sys.modules`).
@@ -161,9 +182,24 @@ Main components include:
 ## Windows_Plugins
 
 This directory contains the **Windows versions of the MEM-SBOM plugins**.
+- **mem_sbom.py**  
+  Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
 
-The analysis pipeline is the same as the Linux implementation (module extraction, version resolution, and dependency generation).  
-The main difference is the binary parsing layer: Windows plugins use **PE parsing** instead of **ELF parsing** to locate the Python runtime structures (e.g., `_PyRuntime`) within the process memory.
+- **module_extractor.py**  
+  Discovers Python modules from process memory using multiple sources (GC, interpreter registry, and heap).
+
+- **py_interpreter.py**  
+  Extracts modules registered in the interpreter (`sys.modules`).
+
+- **py_gc.py**  
+  Walks Python garbage collector structures to locate tracked Python objects.
+
+- **py_heap.py**  
+  Scans process heap memory to identify untracked or hidden Python modules.
+
+- **pe_symbols.py**  
+  Helper plugin used to locate the `_PyRuntime` symbol inside PE binaries during analysis.
+
 
 
    
