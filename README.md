@@ -29,8 +29,7 @@
 - **Python 3.6–3.14 support**
    Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
 
-- **Cross-platform analysis pipeline**  
-   Supports both Linux and Windows Operating Systems.
+- **Cross-platform analysis pipeline**  Supports both Linux and Windows Operating Systems.
 
 
 
