@@ -7,6 +7,35 @@ MEM-SBOM generates **Software Bills of Materials (SBOMs) directly from Python pr
 This allows investigators to recover an accurate SBOM even when the original system is no longer running, such as after crashes, corruption, or destructive attacks.
 
 ---
+
+
+## Key Capabilities
+- **Three-source module discovery**
+   Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module — including hidden, unlinked, and GC-untracked objects.
+
+ - **Cross-process extraction**
+    Automatically discovers child processes (workers, forks) and merges module lists across the entire application tree.
+
+  - **Version extraction from live objects** 
+    Reads __version__, VERSION, version_info and other attributes directly from module dicts in memory, with fallback to installed package metadata
+
+- **Memory-based SBOM generation**  
+  Generates Software Bills of Materials directly from Python process memory rather than relying on package metadata.
+
+- **Dependency graph generation**
+   Analyzes function bytecode (IMPORT_NAME, IMPORT_FROM, CALL targets), module dicts, class hierarchies, and func_module pointers to build a complete dependency graph.
+
+- **CycloneDX SBOM output**  
+  Produces standards-compliant SBOMs (components, dependency relationships, and memory-extraction provenance) that can be integrated with existing vulnerability and supply-chain analysis tools.
+- **Python 3.6–3.14 support**
+  Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
+
+- **Cross-platform analysis pipeline**  
+   Supports both Linux and Windows Operating Systems.
+
+
+
+ --- 
 # Requirements
 
 - Python 3.8 or higher
@@ -53,6 +82,7 @@ https://github.com/volatilityfoundation/volatility3
 # Repository Structure
 
 The repository is organized into several directories that contain the MEM-SBOM plugins, supporting components, and example outputs.
+## Core
 
 ## Linux_Plugins
 
