@@ -6,15 +6,16 @@ from volatility3.plugins.linux import elf_parsing
 import struct
 import re
 
-
 # Brute-force heap scanner for Python objects.
-# Walks r/w memory regions looking for valid PyObject headers.
-# Slower than GC walking but catches objects not tracked by GC.
 #
-# Returns (address, name, PyModuleObject) tuples so the main plugin
-# can merge results from all discovery methods.
+# Walks r/w memory regions at 8-byte alignment looking for valid PyObject
+# headers (ob_refcnt + ob_type). Slower than GC walking but catches objects
+# not tracked by GC — deleted modules, unlinked objects, etc.
+#
+# Returns (address, name, PyModuleObject) tuples, same shape as
+# Py_Interpreter and Py_GC so Module_Extractor can merge everything.
 
-# Symbol table registry - maps (major, minor) to ISF loader parameters.
+# Maps (major, minor) -> ISF symbol table loader parameters
 SYMBOL_TABLE_REGISTRY = {
     (3, 6): (
         'volatility3.framework.symbols.generic.types.python.python36_handler',
@@ -59,7 +60,7 @@ SYMBOL_TABLE_REGISTRY = {
         'python312',
     ),
     (3, 13): (
-        'volatility3.framework.symbols.generic.types.python.python312_handler',
+        'volatility3.framework.symbols.generic.types.python.python313_handler',
         'Python_3_12_IntermedSymbols',
         'generic/types/python',
         'python313',
@@ -72,20 +73,18 @@ SYMBOL_TABLE_REGISTRY = {
     ),
 }
 
-# Sane upper bounds to avoid chasing garbage pointers.
-# refcount > 1M is almost certainly not a real object.
+# Refcount > 1M is almost certainly garbage, not a real object
 MAX_REASONABLE_REFCOUNT = 1_000_000
 
-# md_dict.ma_used sanity bound - even huge apps rarely exceed this
+# md_dict.ma_used sanity bound — even huge apps rarely exceed this
 MAX_DICT_USED = 100_000
 
 # Cap per-region scan to avoid spending forever on giant anon mappings.
-# Head + tail scan for anything larger.
+# Anything larger gets split into head + tail chunks.
 MAX_REGION_SCAN_BYTES = 100 * 1024 * 1024  # 100 MB
 
-# Alignment - CPython allocates all PyObjects on 8-byte boundaries
+# CPython allocates all PyObjects on 8-byte boundaries
 PTR_SIZE = 8
-
 
 class Py_Heap(interfaces.plugins.PluginInterface):
     """Scan heap/anon regions for Python objects (3.6-3.14)."""
@@ -112,9 +111,12 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # Version detection
     # ------------------------------------------------------------------
     def detect_python_version(self, task):
-        """Extract Python major.minor from libpythonX.Y.so or binary path."""
+        """
+        Extract Python major.minor from libpythonX.Y.so or /usr/bin/pythonX.Y
+        in the process VMA list. Returns (major, minor) or None.
+        """
         try:
-            for vma in task.mm.get_mmap_iter():
+            for vma in task.mm.get_vma_iter():
                 fname = vma.get_name(self.context, task)
                 if not fname:
                     continue
@@ -157,7 +159,10 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # Memory region enumeration
     # ------------------------------------------------------------------
     def _get_scannable_regions(self, task):
-        """Collect r/w VMAs: heap, anon, libpython, python binary."""
+        """
+        Collect r/w VMAs worth scanning: [heap], anonymous mappings,
+        libpython, and the python binary itself.
+        """
         regions = []
         for vma in Maps.list_vmas(task):
             flags = vma.get_protection()
@@ -193,7 +198,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # PyObject header validation
     # ------------------------------------------------------------------
     def _is_valid_header(self, refcnt, type_ptr, layer):
-        """Quick sanity check: positive refcount + readable type pointer."""
+        """Sanity check: positive refcount within bounds + readable type pointer."""
         if refcnt < 1 or refcnt > MAX_REASONABLE_REFCOUNT:
             return False
         # type pointer must be in mapped, readable memory
@@ -227,7 +232,10 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # Module-specific validation
     # ------------------------------------------------------------------
     def _validate_module(self, addr, layer):
-        """Check md_dict is a readable PyDictObject with sane ma_used."""
+        """
+        Extra validation for module candidates: check that md_dict is
+        a readable PyDictObject with a sane ma_used count.
+        """
         try:
             mod = self.context.object(
                 object_type=self._py_table + constants.BANG + "PyModuleObject",
@@ -249,7 +257,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
             return False
 
     def _extract_module_info(self, addr, layer):
-        """Build module metadata from a validated PyModuleObject."""
+        """Pull name, __file__, __version__, __package__ from a validated module."""
         info = {
             'address': addr,
             'name': 'Unknown',
@@ -293,12 +301,12 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return info
 
     # ------------------------------------------------------------------
-    # Core scanner - walks a single memory region looking for modules
+    # Core scanner — walks a single memory region at 8-byte alignment
     # ------------------------------------------------------------------
     def _scan_region(self, task, region, type_filter=None):
         """
-        Linear scan at 8-byte alignment looking for PyObject headers.
-        Caches type_ptr -> name so we resolve each unique type only once.
+        Linear scan looking for PyObject headers (ob_refcnt, ob_type).
+        type_ptr -> name is cached so each unique type is resolved once.
         """
         proc_layer_name = task.add_process_layer()
         layer = self.context.layers[proc_layer_name]
@@ -307,9 +315,8 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         end = region['end']
         results = []
 
-        # Cache: type_ptr -> type_name (or None for garbage pointers)
-        type_cache = {}
-        # Cache: set of type_ptrs known to be 'module'
+        
+        type_cache = {} # type_ptr -> type_name (or None)
         module_type_ptrs = set()
 
         scan_count = 0
@@ -329,7 +336,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 addr += PTR_SIZE
                 continue
 
-            # Resolve type name (cached)
+           
             if type_ptr in type_cache:
                 type_name = type_cache[type_ptr]
             else:
@@ -340,13 +347,13 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 addr += PTR_SIZE
                 continue
 
-            # Apply filter if caller only wants specific types
+            
             if type_filter and type_name != type_filter:
                 addr += PTR_SIZE
                 scan_count += 1
                 continue
 
-            # For modules, do extra validation to weed out false positives
+           
             if type_name == 'module':
                 module_type_ptrs.add(type_ptr)
                 if self._validate_module(addr, layer):
@@ -364,7 +371,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return results
 
     # ------------------------------------------------------------------
-    # Public API - get_modules
+    #  Public API — get_modules (for Module_Extractor)
     # ------------------------------------------------------------------
     def get_modules(self, task, python_table_name):
         """
@@ -415,7 +422,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return modules
 
     # ------------------------------------------------------------------
-    # Public API - get_all_objects (generic scanner)
+    #  Public API — get_all_objects (generic scanner)
     # ------------------------------------------------------------------
     def get_all_objects(self, task, python_table_name, type_filter=None):
         """Scan heap for all objects, optionally filtered by type name."""
@@ -444,7 +451,11 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # Region splitting for oversized VMAs
     # ------------------------------------------------------------------
     def _split_region(self, region):
-        """Split oversized regions into head+tail chunks."""
+        """
+        Split regions larger than MAX_REGION_SCAN_BYTES into head + tail
+        chunks. Most Python objects live near the start or end of large
+        anonymous mappings.
+        """
         if region['size'] <= MAX_REGION_SCAN_BYTES:
             return [region]
 

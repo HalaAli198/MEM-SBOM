@@ -7,20 +7,21 @@ import re
 
 
 
-# This plugin walks CPython GC to  extract modules from its linked lists
-# Works across 3.8-3.14 by handling three different GC layouts:
-#   - 3.8:      GC state is global in _PyRuntime (not per-interpreter yet)
-#   - 3.9-3.13: GC moved into PyInterpreterState, still uses generations[3]
-#   - 3.14+:    generations[] replaced with young/old[0]/old[1]/permanent
+# Walk CPython's GC linked lists to extract tracked objects.
 #
-# Returns (address, name, PyModuleObject) tuples, same shape as Py_Arenas
-# and Py_Interpreter so the main plugin can merge everything.
+# Handles three different GC layouts across Python versions:
+#   3.7-3.8:  GC state is global in _PyRuntime (not per-interpreter)
+#   3.9-3.13: GC moved into PyInterpreterState, still uses generations[3]
+#   3.14+:    generations[] replaced with young/old[0]/old[1]/permanent
+#
+# Returns (address, name, PyModuleObject) tuples, same shape as
+# Py_Interpreter and Py_Heap so Module_Extractor can merge everything.
 
-# _PyRuntime -> interpreters.head
-# Offset to dereference the interpreter linked list head from _PyRuntime.
-# Got these with: p/x (int)&((_PyRuntimeState*)0)->interpreters.head
-# (on 3.12+ the struct was renamed: p/x (int)&((struct pyruntimestate*)0)->interpreters.head)
-# 3.13+ has _Py_DebugOffsets so we read it at runtime instead.
+# -----------------------------------------------------------------------
+# _PyRuntime -> interpreters.head offsets
+# Obtained via: p/x (int)&((_PyRuntimeState*)0)->interpreters.head
+# 3.13+ reads this from _Py_DebugOffsets at runtime instead.
+# -----------------------------------------------------------------------
 PYRUNTIME_INTERP_HEAD_OFFSETS = {
     (3, 7):  0x10,
     (3, 8):  0x20,
@@ -31,41 +32,47 @@ PYRUNTIME_INTERP_HEAD_OFFSETS = {
 }
 
 
-# Offset of generations[0] within struct _gc_runtime_state (3.8-3.12)
-# Fields before generations (identical 3.8-3.12):
-#   PyObject *trash_delete_later   (8 bytes)
-#   int trash_delete_nesting       (4 bytes)
-#   int enabled                    (4 bytes)
-#   int debug                      (4 bytes)
-#   <4 bytes padding>
-#   -> generations at 0x18
+# -----------------------------------------------------------------------
+# GC generation layout constants (3.8-3.13)
+# -----------------------------------------------------------------------
+
+# Offset of generations[0] within _gc_runtime_state.
+# Fields before generations:
+#   trash_delete_later (8) + trash_delete_nesting (4) + enabled (4)
+#   + debug (4) + 4 padding = 0x18
 GC_GENERATIONS_OFFSET_IN_GC = 0x18
 
-# Number of GC generations (constant 3.8-3.13)
 NUM_GENERATIONS = 3
 
-# Size of each gc_generation struct (3.8-3.13):
-#   PyGC_Head head (16 bytes) + int threshold (4) + int count (4) = 24
+# sizeof(gc_generation): PyGC_Head (16) + threshold (4) + count (4) = 24
 GC_GENERATION_SIZE = 24
 
 
-#3.14 replaced generations[] with separate lists(young, old[0], old[1], permanent):
-# old is an array of 2 gc_generation_data: old[0] at 0x30, old[1] at 0x48
+# -----------------------------------------------------------------------
+# 3.14 incremental GC: separate lists replaced generations[]
+# Offsets within _gc_runtime_state for each list head:
+# -----------------------------------------------------------------------
 GC_314_YOUNG_OFFSET = 0x18
 GC_314_OLD0_OFFSET = 0x30
-GC_314_OLD1_OFFSET = 0x48  # 0x30 + 24 (sizeof gc_generation_data)
+GC_314_OLD1_OFFSET = 0x48   # old[0] + sizeof(gc_generation_data)
 GC_314_PERMANENT_OFFSET = 0x60
 GC_314_VISITED_SPACE_OFFSET = 0xe8
 
 
-# 3.7-3.8: GC is global in _PyRuntime, not per-interpreter.
-# Got with: p/x &((_PyRuntimeState*)0)->gc.generations
+# -----------------------------------------------------------------------
+# Version-specific GC location offsets
+# -----------------------------------------------------------------------
+
+# 3.7-3.8: GC lives directly in _PyRuntime (global).
+# Obtained via: p/x &((_PyRuntimeState*)0)->gc.generations
+
 PYRUNTIME_GC_GENERATIONS_OFFSET = {
     (3, 7): 0x160,
     (3, 8): 0x170,
 }
-# 3.9-3.12: GC is per-interpreter. These are the offsets of the gc field
-# inside PyInterpreterState. Got with: p/x &((PyInterpreterState*)0)->gc
+
+# 3.9-3.12: GC is per-interpreter.
+# Obtained via: p/x &((PyInterpreterState*)0)->gc
 INTERP_GC_OFFSETS = {
     (3, 9):  0x268,
     (3, 10): 0x268,
@@ -73,25 +80,21 @@ INTERP_GC_OFFSETS = {
     (3, 12): 0x70,
 }
 
-# Python 3.13+: gc offset read from _Py_DebugOffsets dynamically.
-# _Py_DebugOffsets starts at _PyRuntime + 0x0 (confirmed 3.13 and 3.14).
-# Position of interpreter_state.gc within _Py_DebugOffsets:
+# 3.13+: gc offset read from _Py_DebugOffsets at runtime.
+# _Py_DebugOffsets starts at _PyRuntime + 0x0.
+# Position of interpreter_state.gc within the debug offsets struct:
 DEBUG_OFFSETS_GC_FIELD_POS = {
     (3, 13): 80,   # 0x50
-    #(3, 14): 88,   # 0x58
     (3, 14): 72,   # 0x48
 }
+
 DEBUG_OFFSETS_GC_FIELD_POS_DEFAULT = 88 
 
-# Position of runtime_state.interpreters_head within _Py_DebugOffsets
-#   3.13: 0x28 
-#   3.14: 0x28 
+# Position of runtime_state.interpreters_head in _Py_DebugOffsets
 DEBUG_OFFSETS_INTERP_HEAD_POS = 0x28
 
 
-# ==========================================================================
-# SYMBOL TABLE REGISTRY - maps Python version to loader parameters
-# ==========================================================================
+# Maps (major, minor) -> ISF symbol table loader parameters
 SYMBOL_TABLE_REGISTRY = {
     (3, 6): (
         'volatility3.framework.symbols.generic.types.python.python36_handler',
@@ -151,7 +154,7 @@ SYMBOL_TABLE_REGISTRY = {
 
 
 class Py_GC(interfaces.plugins.PluginInterface):
-    """Walk CPython GC lists and extract tracked objects (3.8-3.14)."""
+    """Walk CPython GC lists and extract tracked objects (3.6-3.14)."""
     _version = (2, 0, 0)
     _required_framework_version = (2, 0, 0)
 
@@ -176,12 +179,11 @@ class Py_GC(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def detect_python_version(self, task):
         """
-        Extracts Python major.minor from the process's loaded libraries
-        (libpythonX.Y.so) or binary path (/usr/bin/pythonX.Y).
-        Returns tuple like (3, 8) or None.
+        Extract Python major.minor from libpythonX.Y.so or /usr/bin/pythonX.Y
+        in the process VMA list. Returns (major, minor) or None.
         """
         try:
-            for vma in task.mm.get_mmap_iter():
+            for vma in task.mm.get_vma_iter():
                 fname = vma.get_name(self.context, task)
                 if fname and 'libpython' in fname:
                     match = re.search(r'libpython(\d+)\.(\d+)', fname)
@@ -196,23 +198,19 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return None
 
     # ------------------------------------------------------------------
-    # Symbol resolution via elf_parsing
+    # _PyRuntime resolution
     # ------------------------------------------------------------------
     def find_py_runtime_address(self, task):
       """
-      Resolves the _PyRuntime global symbol from the Python process's
-      ELF image using elf_parsing.find_symbol_in_process.
-
-      The updated find_symbol_in_process searches both libpython and
-      the python binary automatically.
+      Resolve _PyRuntime from the process ELF image via elf_parsing.
+      Searches both libpython and the python binary.
       """
       try:
         proc_layer_name = task.add_process_layer()
       except exceptions.InvalidAddressException:
         return None
 
-      # find_symbol_in_process now tries libpython first, then the
-      # python binary, searching both if needed
+     
       resolved = elf_parsing.find_symbol_in_process(
         self.context, proc_layer_name, task,
         module_substring="libpython",
@@ -233,19 +231,14 @@ class Py_GC(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def get_interpreter_head_address(self, version, py_runtime_addr):
         """
-        Returns the address of the first PyInterpreterState.
+        Dereference _PyRuntime to get the first PyInterpreterState.
 
-        Resolution:
-          3.7-3.12: hardcoded offset table (PYRUNTIME_INTERP_HEAD_OFFSETS)
-          3.13+:    read from _Py_DebugOffsets.runtime_state.interpreters_head
-                    _Py_DebugOffsets is at _PyRuntime + 0x0 (first field)
-                    interpreters_head is at debug_offsets + 0x28
+        3.7-3.12: hardcoded offset from PYRUNTIME_INTERP_HEAD_OFFSETS
+        3.13+:    read from _Py_DebugOffsets at debug_offsets + 0x28
         """
         key = version[:2]
 
         if key >= (3, 13):
-            # _Py_DebugOffsets is at _PyRuntime + 0x0
-            # runtime_state.interpreters_head is at debug_offsets + 0x28
             raw = self.context.layers[self.process_layer].read(
                 py_runtime_addr + DEBUG_OFFSETS_INTERP_HEAD_POS, 8
             )
@@ -255,7 +248,6 @@ class Py_GC(interfaces.plugins.PluginInterface):
             offset = PYRUNTIME_INTERP_HEAD_OFFSETS.get(key, 0x20)
             print(f"  interpreters.head offset from table: 0x{offset:x}")
 
-        # Dereference the pointer at _PyRuntime + offset
         head_ptr_addr = py_runtime_addr + offset
         head_bytes = self.context.layers[self.process_layer].read(head_ptr_addr, 8)
         head_addr = int.from_bytes(head_bytes, 'little')
@@ -268,16 +260,15 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return head_addr
 
     # ------------------------------------------------------------------
-    # GC base address resolution - returns _gc_runtime_state address
+    # GC base address resolution
     # ------------------------------------------------------------------
     def find_gc_base_address(self, version, py_runtime_addr, interpreter_addr):
         """
-        Returns the base address of _gc_runtime_state.
+        Locate the _gc_runtime_state struct.
 
-        Resolution strategy by version:
-          3.8:       GC is global in _PyRuntime.
-          3.9-3.12:  GC is per-interpreter, hardcoded offset.
-          3.13+:     GC is per-interpreter, offset from _Py_DebugOffsets.
+        3.7-3.8:  GC is global in _PyRuntime
+        3.9-3.12: GC is per-interpreter, hardcoded offset
+        3.13+:     GC is per-interpreter, offset read from _Py_DebugOffsets
         """
         key = version[:2]
 
@@ -287,6 +278,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
            gc_base = py_runtime_addr + gen_offset - GC_GENERATIONS_OFFSET_IN_GC
            print(f"Python {key[0]}.{key[1]}: GC base in _PyRuntime at 0x{gc_base:x}")
            return gc_base
+        
         # 3.13+: read gc offset from _Py_DebugOffsets dynamically
         if key >= (3, 13):
             debug_gc_pos = DEBUG_OFFSETS_GC_FIELD_POS.get(
@@ -314,13 +306,10 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return gc_base
 
     # ------------------------------------------------------------------
-    # Legacy: generations[0] head address (3.8-3.13 compat wrapper)
+    # Legacy: generations[0] head address (3.8-3.13)
     # ------------------------------------------------------------------
     def find_gc_generations_head(self, version, py_runtime_addr, interpreter_addr):
-        """
-        Returns the memory address of gc.generations[0].head.
-        Only valid for 3.8-3.13. For 3.14+, use find_gc_base_address directly.
-        """
+        """Return address of gc.generations[0].head. Only valid for 3.6-3.13."""
         key = version[:2]
         if key >= (3, 14):
             print("Python 3.14+ uses incremental GC - use find_gc_base_address()")
@@ -335,19 +324,17 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return gen0_addr
 
     # ------------------------------------------------------------------
-    # Walk a single GC linked list (shared by both legacy and 3.14+)
+    # Walk a single GC linked list
     # ------------------------------------------------------------------
     def _walk_gc_list(self, head_addr, list_name, python_table_name,
                       gc_head_size, type_filter=None):
         """
-        Walk a single PyGC_Head doubly-linked list starting from the sentinel
-        at head_addr. The sentinel's _gc_next points to the first real entry.
-
-        Each tracked object sits immediately after its PyGC_Head:
+        Walk a PyGC_Head doubly-linked list from the sentinel at head_addr.
+        The sentinel's _gc_next points to the first real tracked object.
+        Each object sits right after its PyGC_Head prefix:
             object_addr = gc_head_addr + sizeof(PyGC_Head)
 
-        Returns:
-            list of (address, type_name, list_name, PyObject) tuples
+        Returns list of (address, type_name, list_name, PyObject) tuples.
         """
         results = []
 
@@ -415,12 +402,10 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return results
 
     # ------------------------------------------------------------------
-    # GC traversal - 3.8-3.13: walks all 3 generations
+    # GC traversal: legacy generations (3.6-3.13)
     # ------------------------------------------------------------------
     def traverse_gc_legacy(self, gen0_addr, python_table_name, type_filter=None):
-        """
-        Walk all 3 GC generations starting from gen0_addr (Python 3.8-3.13).
-        """
+        """Walk all 3 GC generations starting from gen0_addr."""
         gc_head_size = self.context.symbol_space.get_type(
             python_table_name + constants.BANG + "PyGC_Head"
         ).size
@@ -439,20 +424,14 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return results
 
     # ------------------------------------------------------------------
-    # GC traversal - 3.14+: walks young, old[0], old[1], permanent
+    # GC traversal: incremental (3.14+)
     # ------------------------------------------------------------------
     def traverse_gc_incremental(self, gc_base_addr, python_table_name, type_filter=None):
         """
-        Walk Python 3.14+ incremental GC lists.
+        Walk Python 3.14+ incremental GC lists: young, old[0], old[1], permanent.
 
-        Layout within _gc_runtime_state:
-          gc_base + 0x18: young        (gc_generation_data)
-          gc_base + 0x30: old[0]       (gc_generation_data)
-          gc_base + 0x48: old[1]       (gc_generation_data)
-          gc_base + 0x60: permanent    (gc_generation_data)
-
-        visited_space (at gc_base + 0xe8) tells which old[] space is currently
-        the "visited" side of incremental collection.
+        visited_space (at gc_base + 0xe8) indicates which old[] space is
+        the "visited" side of the current incremental collection cycle.
         """
         gc_head_size = self.context.symbol_space.get_type(
             python_table_name + constants.BANG + "PyGC_Head"
@@ -495,10 +474,8 @@ class Py_GC(interfaces.plugins.PluginInterface):
     def traverse_gc(self, gc_addr, python_table_name,
                     type_filter=None, version=None):
         """
-        Unified GC traversal - dispatches to legacy or incremental walker.
-
-        For 3.8-3.13: gc_addr = gen0 address (legacy).
-        For 3.14+:    gc_addr = gc_base address (incremental).
+        Dispatch to legacy (3.6-3.13) or incremental (3.14+) GC walker.
+        gc_addr is gen0 address for legacy, gc_base for incremental.
         """
         key = version[:2] if version else (3, 8)
 
@@ -516,15 +493,14 @@ class Py_GC(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def _resolve_gc(self, task):
         """
-        Common resolution pipeline used by all public APIs.
+        Common resolution pipeline for all public APIs.
+        Detects version, finds _PyRuntime, resolves interpreter and GC addresses.
 
-        Returns:
-          (gc_addr, version) where gc_addr is:
-            - gen0 address for 3.8-3.13 (legacy)
-            - gc_base address for 3.14+ (incremental)
-          or (None, None) on failure.
+        Returns (gc_addr, version) where gc_addr is:
+          - gen0 address for 3.6-3.13
+          - gc_base address for 3.14+
+        Returns (None, None) on failure.
         """
-       
 
         version = self.detect_python_version(task)
         if not version:
@@ -534,6 +510,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
         key = version[:2]
         print(f"Detected Python {key[0]}.{key[1]}")
        
+        # 3.6: separate path, no _PyRuntime
         if key == (3, 6):
            return self._resolve_gc_36(task, version)
 
@@ -542,8 +519,9 @@ class Py_GC(interfaces.plugins.PluginInterface):
         if not py_runtime:
            print("Could not find _PyRuntime")
            return None, None
-        # 3.8: no interpreter needed, GC is in _PyRuntime
-        # 3.9+: need interpreter address
+        
+        # 3.7-3.8: GC is in _PyRuntime, no interpreter address needed
+        # 3.9+: need interpreter address since GC moved per-interpreter
         interpreter_addr = None
         if key not in PYRUNTIME_GC_GENERATIONS_OFFSET:
             interpreter_addr = self.get_interpreter_head_address(version, py_runtime)
@@ -552,11 +530,9 @@ class Py_GC(interfaces.plugins.PluginInterface):
                 return None, None
 
         if key >= (3, 14):
-            # 3.14+: return gc_base for incremental walker
             gc_base = self.find_gc_base_address(version, py_runtime, interpreter_addr)
             return gc_base, version
         else:
-            # 3.8-3.13: return gen0 address for legacy walker
             gen0_addr = self.find_gc_generations_head(version, py_runtime, interpreter_addr)
             return gen0_addr, version
 
@@ -564,14 +540,10 @@ class Py_GC(interfaces.plugins.PluginInterface):
     def _resolve_gc_36(self, task, version):
       """
       Python 3.6 GC resolution.
-    
-      In 3.6 there is no _PyRuntime. The GC generations are accessed via
-      the global '_PyGC_generation0' which points directly to generations[0].head.
-      The 'generations' global is the array of 3 gc_generation structs.
-    
-      We resolve _PyGC_generation0 and dereference it to get gen0 head address.
-      The generations array is at _PyGC_generation0 value (since gen0 IS the
-      first element of the array).
+
+      3.6 has no _PyRuntime. The global _PyGC_generation0 points directly
+      to generations[0].head. We resolve it and dereference to get gen0.
+      The generations array starts at that address since gen0 is the first element.
       """
       try:
         proc_layer_name = task.add_process_layer()
@@ -590,9 +562,6 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return None, None
 
       print(f"Resolved _PyGC_generation0 at: 0x{gen0_ptr_addr:x}")
-
-      # _PyGC_generation0 is a PyGC_Head* — it points to generations[0].head
-      # Read the pointer value
       layer = self.context.layers[proc_layer_name]
       gen0_bytes = layer.read(gen0_ptr_addr, 8)
       gen0_addr = int.from_bytes(gen0_bytes, 'little')
@@ -603,24 +572,18 @@ class Py_GC(interfaces.plugins.PluginInterface):
 
       print(f"generations[0].head at 0x{gen0_addr:x}")
 
-      # In 3.6, the generations array layout is the same as 3.8:
-      #   3 x gc_generation (each 24 bytes: PyGC_Head head[16] + threshold[4] + count[4])
-      # gen0_addr points to the head of generation 0
-      # gen1 = gen0_addr + 24, gen2 = gen0_addr + 48
+      
+      # Layout is identical to 3.8: 3 x gc_generation (24 bytes each)
       return gen0_addr, version
     
     
     # ------------------------------------------------------------------
-    # Public API - get_modules (for main plugin integration)
+    # Public API — get_modules (for Module_Extractor)
     # ------------------------------------------------------------------
     def get_modules(self, task, python_table_name):
         """
-        High-level entry point for the main plugin.
-        Walks GC generations/lists and returns only module objects.
-
-        Returns:
-            list of (address, name, PyModuleObject) tuples,
-            same format as Py_Arenas and Py_Interpreter.
+        Walk GC lists and return only module objects.
+        Returns list of (address, name, PyModuleObject) tuples.
         """
         task_layer = task.add_process_layer()
         self.process_layer = self.context.layers[task_layer].name
@@ -634,7 +597,6 @@ class Py_GC(interfaces.plugins.PluginInterface):
             type_filter='module', version=version
         )
 
-        # Convert to standard (address, name, module_obj) format
         modules = []
         seen = set()
         for addr, type_name, list_name, obj in gc_objects:
@@ -657,12 +619,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
     # Public API - get_all_objects (generic GC walker)
     # ------------------------------------------------------------------
     def get_all_objects(self, task, python_table_name, type_filter=None):
-        """
-        Walk GC and return all tracked objects (or filtered by type).
-
-        Returns:
-            list of (address, type_name, list_name, PyObject) tuples
-        """
+        """Walk GC and return all tracked objects, optionally filtered by type."""
         task_layer = task.add_process_layer()
         self.process_layer = self.context.layers[task_layer].name
 
@@ -679,10 +636,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
     # Standalone execution
     # ------------------------------------------------------------------
     def _load_symbol_table(self, version):
-        """
-        Load the appropriate IntermedSymbols class for the detected version.
-        Returns the symbol table name, or None if no table is registered.
-        """
+        """Load ISF symbol table for the detected CPython version."""
         key = version[:2]
         print(f"key: {key}")
         entry = SYMBOL_TABLE_REGISTRY.get(key)
@@ -705,10 +659,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
         return python_table_name
 
     def _collect_data(self, tasks):
-        """
-        Entry point when running as a standalone Volatility plugin.
-        Detects version, loads symbol table, walks GC, returns modules.
-        """
+        """Standalone mode: detect version, load symbols, walk GC."""
         task = list(tasks)[0]
         if not task or not task.mm:
             return []
@@ -740,7 +691,7 @@ class Py_GC(interfaces.plugins.PluginInterface):
             return ""
 
     def get_value_type(self, value):
-        """Returns the type name for a PyObject by reading ob_type->tp_name."""
+        """Get the type name for a PyObject via ob_type->tp_name."""
         if value is None:
             return 'NoneType'
         if hasattr(value, 'ob_type'):

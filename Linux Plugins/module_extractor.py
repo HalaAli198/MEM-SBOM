@@ -5,21 +5,17 @@ from volatility3.plugins.linux import pslist
 import re
 
 
+
 # Application-level Python module extractor.
 #
-# Given a root PID, discovers all descendant processes, identifies which
-# are Python, runs py_gc + py_heap + py_interpreter on each, and produces
-# a unified deduplicated module list for the entire application.
+# Given a root PID, finds all descendant processes, identifies which
+# ones are Python, runs py_interpreter + py_gc + py_heap on each, and
+# produces a unified deduplicated module list for the whole application.
 #
-# Two-level merge:
-#   1) Per-process: combine all three sources, dedup by ADDRESS
-#      (same process memory = same address = same object)
-#   2) Cross-process: merge all per-process lists, dedup by NAME
-#      (forked workers share modules via COW but at different addrs)
-#
-# Usage:
-#   vol.py -f dump.vmem linux.py_app.Py_App --pid 22162
-
+# Two-level deduplication:
+#   1) Per-process: merge by ADDRESS (same address = same object in memory)
+#   2) Cross-process: merge by NAME (forked workers share modules via COW
+#      but at different virtual addresses)
 
 SYMBOL_TABLE_REGISTRY = {
     (3, 6): (
@@ -165,9 +161,12 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
     # Python detection
     # ------------------------------------------------------------------
     def _detect_python_version(self, task):
-        """Returns (major, minor) if process has libpython loaded, else None."""
+        """
+        Check VMA paths for libpythonX.Y.so or /usr/bin/pythonX.Y.
+        Returns (major, minor) or None if the process isn't Python.
+        """
         try:
-            for vma in task.mm.get_mmap_iter():
+            for vma in task.mm.get_vma_iter():
                 fname = vma.get_name(self.context, task)
                 if not fname:
                     continue
@@ -187,6 +186,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
     # Symbol table loading (cached per version)
     # ------------------------------------------------------------------
     def _load_symbol_table(self, version):
+        """Load ISF symbol table for the given CPython version. Cached."""
         key = version[:2]
         if key in self._symbol_table_cache:
             return self._symbol_table_cache[key]
@@ -213,10 +213,10 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def _extract_modules_for_process(self, task, python_table_name):
         """
-        Run py_interpreter, py_gc, py_heap on one process.
-        Merge by address — within the same process, same address = same object.
+        Run py_interpreter, py_gc, py_heap on one process and merge
+        results by address. Within one process, same address = same object.
 
-        Returns dict: {addr: (addr, name, sources_set, mod_obj)}
+        Returns dict: {addr: [addr, name, sources_set, mod_obj]}
         """
         from volatility3.plugins.linux.py_gc import Py_GC
         from volatility3.plugins.linux.py_heap import Py_Heap
@@ -274,7 +274,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             except Exception as e:
                 print(f"    heap error: {e}")
 
-        # Print per-process combined results
+        
         print(f"\n  --- PID {pid} ({comm}) combined ---")
         print(f"  unique addresses: {len(merged)}")
         for addr in sorted(merged.keys()):
@@ -285,7 +285,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
         return merged
 
     # ------------------------------------------------------------------
-    # Main logic
+    # Main collection logic
     # ------------------------------------------------------------------
     def _collect_all(self):
         self._symbol_table_cache = {}
@@ -303,7 +303,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             print("ERROR: --pid is required")
             return []
 
-        # Discover all descendants
+        # Walk the process tree from each root PID
         target_tasks = []
         for root_pid in root_pids:
             if root_pid not in tasks_by_pid:
@@ -312,7 +312,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             descendants = self._collect_descendants(root_pid, tasks_by_pid, children_map)
             target_tasks.extend(descendants)
 
-        # Dedup tasks
+        # Dedup (a PID could appear under multiple roots)
         seen_pids = set()
         unique_tasks = []
         for t in target_tasks:
@@ -357,9 +357,9 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             process_modules = self._extract_modules_for_process(task, table_name)
             per_process[task.pid] = (comm, process_modules)
 
-        # ---- Phase 2: cross-process merge by NAME ----
-        # Forked workers have the same modules at potentially different
-        # virtual addresses (COW), so we dedup by name across processes.
+        # --- Phase 2: cross-process merge by name ---
+        # Forked workers have the same modules at different virtual addresses
+        # (COW pages), so we dedup by module name across all processes.
         global_modules = {}  # name -> (addr, name, sources_str, pid, comm, mod_obj)
 
         for pid, (comm, addr_map) in per_process.items():

@@ -1,79 +1,23 @@
+# MEM-SBOM: Software Bill of Materials from memory.
+#
+# Pipeline:
+#   1. Module_Extractor: extract all loaded Python modules across the process tree
+#   2. Find 'sys' module, parse sys.path_importer_cache for installed packages
+#   3. Group and classify modules (application / third-party / stdlib)
+#   4. Extract version info from module dicts
+#   5. Resolve pip package names → import names via PyPI
+#   6. Fill unknown versions from installed package metadata
+#   7. Generate dependency graph (optional, --dep flag)
+#   8. Write CycloneDX 1.5 SBOM JSON
+
 from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
 from volatility3.framework.objects import utility
 from volatility3.plugins.linux import pslist
 import re
-
-
-# MEM-SBOM: Software Bill of Materials from memory.
-#
-# Step 1: Use Module_Extractor to get all loaded Python modules across
-#          the process tree.
-# Step 2: Find the 'sys' module, extract sys.path_importer_cache,
-#          parse .dist-info/.egg-info entries for installed package
-#          names and versions.
-#
-# Usage:
-#   vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162
-
-
-SYMBOL_TABLE_REGISTRY = {
-    (3, 6): (
-        'volatility3.framework.symbols.generic.types.python.python36_handler',
-        'Python_3_6_IntermedSymbols',
-        'generic/types/python',
-        'python36',
-    ),
-    (3, 7): (
-        'volatility3.framework.symbols.generic.types.python.python37_handler',
-        'Python_3_7_IntermedSymbols',
-        'generic/types/python',
-        'python37',
-    ),
-    (3, 8): (
-        'volatility3.framework.symbols.generic.types.python.python38_handler',
-        'Python_3_8_IntermedSymbols',
-        'generic/types/python',
-        'python38',
-    ),
-    (3, 9): (
-        'volatility3.framework.symbols.generic.types.python.python39_handler',
-        'Python_3_9_IntermedSymbols',
-        'generic/types/python',
-        'python39',
-    ),
-    (3, 10): (
-        'volatility3.framework.symbols.generic.types.python.python310_handler',
-        'Python_3_10_IntermedSymbols',
-        'generic/types/python',
-        'python310',
-    ),
-    (3, 11): (
-        'volatility3.framework.symbols.generic.types.python.python311_handler',
-        'Python_3_11_IntermedSymbols',
-        'generic/types/python',
-        'python311',
-    ),
-    (3, 12): (
-        'volatility3.framework.symbols.generic.types.python.python312_handler',
-        'Python_3_12_IntermedSymbols',
-        'generic/types/python',
-        'python312',
-    ),
-    (3, 13): (
-        'volatility3.framework.symbols.generic.types.python.python312_handler',
-        'Python_3_12_IntermedSymbols',
-        'generic/types/python',
-        'python313',
-    ),
-    (3, 14): (
-        'volatility3.framework.symbols.generic.types.python.python314_handler',
-        'Python_3_14_IntermedSymbols',
-        'generic/types/python',
-        'python314',
-    ),
-}
-
+import json
+import uuid
+from datetime import datetime
 
 class MEM_SBOM(interfaces.plugins.PluginInterface):
     """Generate Software Bill of Materials from Python process memory."""
@@ -190,6 +134,9 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
     # Extract installed packages from sys.path_importer_cache
     # ------------------------------------------------------------------
     def extract_installed_packages(self, sys_mod_dict):
+      """Walk sys.path_importer_cache entries for site-packages/dist-packages
+      directories and extract package names + versions from .dist-info/.egg-info."""
+     
       if 'path_importer_cache' not in sys_mod_dict:
         print("  sys.path_importer_cache not found")
         return []
@@ -232,7 +179,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
     def find_sys_module(self, modules):
         """
         Find the 'sys' module in the extracted module list and return
-        its dict (mod_obj.get_dict2()).
+        its dict.
 
         modules: list of (addr, name, sources_str, pid, comm, mod_obj)
         Returns: dict or None
@@ -274,6 +221,110 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         groups[parent].append(mod_tuple)
 
       return groups
+    
+    def generate_mem_sbom(self, package_versions, dep_graph, main_app_name):
+      """
+      Generate CycloneDX 1.5 SBOM for application + third-party packages.
+    
+      package_versions: {parent_name: (version, path, category)}
+      dep_graph:        {parent_name: [dep_name, ...]} or {}
+      """
+      components = []
+      bom_ref_map = {}
+
+      for parent_name, (version, path, category) in package_versions.items():
+        # Only application + third-party
+        if category not in ('application', 'third-party'):
+            continue
+
+        clean_version = version if version != "unknown" else "0.0.0"
+        bom_ref = (
+            f"{parent_name.replace('.', '_').replace('-', '_')}-"
+            f"{clean_version.replace('.', '_')}"
+        )
+        bom_ref_map[parent_name] = bom_ref
+
+        if '.' in parent_name:
+            pypi_name = parent_name.replace('.', '-').lower()
+        else:
+            pypi_name = parent_name.replace('_', '-').lower()
+
+        purl = f"pkg:pypi/{pypi_name}@{clean_version}"
+
+        component = {
+            "type": "library",
+            "bom-ref": bom_ref,
+            "name": parent_name,
+            "version": clean_version,
+            "purl": purl,
+            "scope": "required",
+            "properties": [
+                {"name": "classification", "value": category},
+                {"name": "extracted_from", "value": "memory"},
+            ],
+        }
+
+        if path and path != "None":
+            component["properties"].append({"name": "file_path", "value": path})
+            component["evidence"] = {"occurrences": [{"location": path}]}
+
+        if version == "unknown":
+            component["properties"].append({"name": "version_detection", "value": "failed"})
+            component["purl"] = f"pkg:pypi/{pypi_name}"
+
+        components.append(component)
+
+      # --- Dependencies ---
+      dependencies = []
+
+      if dep_graph:
+        for parent_name, dep_list in dep_graph.items():
+            ref = bom_ref_map.get(parent_name)
+            if not ref:
+                continue
+            depends_on = [
+                bom_ref_map[d] for d in dep_list if d in bom_ref_map
+            ]
+            dependencies.append({"ref": ref, "dependsOn": depends_on})
+        # Empty entries for components not in dep_graph
+        referenced = {d["ref"] for d in dependencies}
+        for comp in components:
+            if comp["bom-ref"] not in referenced:
+                dependencies.append({"ref": comp["bom-ref"], "dependsOn": []})
+      else:
+        for comp in components:
+            dependencies.append({"ref": comp["bom-ref"], "dependsOn": []})
+
+      timestamp = datetime.utcnow().isoformat() + "Z"
+
+      sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version": 1,
+        "metadata": {
+            "timestamp": timestamp,
+            "tools": [{
+                "name": "MEM-SBOM",
+                "version": "1.0.0",
+            }],
+            "component": {
+                "type": "application",
+                "name": main_app_name,
+                "description": "Python application analyzed from memory dump",
+            },
+            "properties": [
+                {"name": "extraction_method", "value": "memory_analysis"},
+                {"name": "total_components", "value": str(len(components))},
+                {"name": "dependency_graph_enabled", "value": str(bool(dep_graph))},
+            ],
+        },
+        "components": components,
+        "dependencies": dependencies,
+        "vulnerabilities": [],
+      }
+
+      return sbom
     
     # ------------------------------------------------------------------
     # Main logic
@@ -319,39 +370,19 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
         print(f"\n{'='*60}")
         print("SUMMARY")
         print(f"{'='*60}")
-        #print(f"  Loaded modules (from memory):     {len(all_modules)}")
         print(f"  Installed packages (from cache):   {len(installed_packages)}")
         # ----------------------------------------------------------
-        # Step 3: Group modules by parent
+        # Step 3: Group modules by parent and  classify parent modules
         # ----------------------------------------------------------
         print(f"\n{'='*60}")
-        print("MODULE GROUPING BY PARENT")
+        print("STEP 3: Module grouping by parent")
         print(f"{'='*60}")
-
+        
         grouped = self.group_modules_by_parent(all_modules)
-        '''
-        for parent in sorted(grouped.keys()):
-            children = grouped[parent]
-            if len(children) == 1 and children[0][1] == parent:
-                # Standalone module, no sub-modules
-                print(f"  {parent}")
-            else:
-                child_names = sorted([c[1] for c in children])
-                print(f"  {parent}")
-                for child in child_names:
-                    if child != parent:
-                        print(f"    └─ {child}")
-
-        print(f"\n  Top-level modules: {len(grouped)}")
-        print(f"  Total modules:     {len(all_modules)}")
-        '''
-        # ----------------------------------------------------------
-        # Step 3: Classify parent modules
-        # ----------------------------------------------------------
+        
         print(f"\n{'='*60}")
         print("STEP 3: Module classification")
         print(f"{'='*60}")
-
         from volatility3.plugins.linux.module_classifier import Module_Classifier
 
         classifier = Module_Classifier()
@@ -680,7 +711,20 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
           print("STEP 7: Generating dependency graph")
           print(f"{'='*60}")
         
-          dep_gen = Dependency_Generator()
+          # Detect Python version from symbol table name
+          python_version = (3, 12)  # safe fallback
+          try:
+              st_name = all_modules[0][5].get_symbol_table_name()
+              # e.g. "python3141" -> 3.14, "python3121" -> 3.12
+              import re as _re
+              m = _re.search(r'python(\d)(\d{1,2})\d$', st_name)
+              if m:
+                  python_version = (int(m.group(1)), int(m.group(2)))
+                  print(f"  Detected Python version: {python_version} (from {st_name})")
+          except Exception:
+              pass
+
+          dep_gen = Dependency_Generator(python_version=python_version)
           dep_graph = dep_gen.build_dependency_graph(classified, grouped)
 
           print(f"\n{'='*60}")
@@ -690,8 +734,28 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
               deps = dep_graph[parent]
               print(f"  {parent} → [{', '.join(deps)}]")
 
-          return all_modules, installed_packages, dep_graph
+          
 
+        # ----------------------------------------------------------
+        # Step 8: Write CycloneDX SBOM JSON
+        # ----------------------------------------------------------
+        print(f"\n{'='*60}")
+        print("STEP 8: Generating CycloneDX SBOM")
+        print(f"{'='*60}")
+        main_app_name = "Unknown Application"
+        for addr, name, sources, pid, comm, mod_obj in all_modules:
+            if pid == self.config['pid'][0]:
+               main_app_name = comm
+               break
+        sbom = self.generate_mem_sbom(package_versions, dep_graph, main_app_name)
+
+        sbom_path = f"{pid}.json"
+        with open(sbom_path, 'w') as f:
+            json.dump(sbom, f, indent=2)
+        print(f"  Written to: {sbom_path}")
+        print(f"  Components: {len(sbom['components'])}")
+        print(f"  Dependencies: {len(sbom['dependencies'])}")
+        return all_modules, installed_packages, dep_graph
     # ------------------------------------------------------------------
     # Volatility renderer
     # ------------------------------------------------------------------
