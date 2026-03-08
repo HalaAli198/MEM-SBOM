@@ -47,19 +47,19 @@ This allows investigators to recover an accurate SBOM even when the original sys
 ---
 
 # Installation
+## 1.Clone this repository
+  git clone https://github.com/HalaAli198/MEM-SBOM.git
 
-## 1. Install Volatility 3
-MEM-SBOM plugins are built on top of the **Volatility 3 Framework**.
-
--  Clone the Volatility3 repository and follow the installation instructions at:
+## 12. Install Volatility 3
+  Since MEM-SBOM plugins are built on top of the **Volatility 3 Framework**: Clone the Volatility3 repository and follow the installation instructions at:
 https://github.com/volatilityfoundation/volatility3
 
-## 2. Install the dwarf2json Tool
+## 3. Install the dwarf2json Tool
 -  Use the `dwarf2json` tool to generate Python symbol tables suitable for Linux and Python internals.
 - Clone the dwarf2json repository, place it in the Volaitlity 3 directory, and follow the installation instructions at:
  https://github.com/volatilityfoundation/dwarf2json
 
- ### 3. Generate Symbol Tables
+ ### 4. Generate Symbol Tables
 #### For Linux Kernel:
 - Command: ```./dwarf2json linux --elf /path/to/vmlinux > vmlinux-VERSION.json```
 - Example: Generate symbol table for Linux (kernel-5.15.0-126): ```./dwarf2json linux --elf vmlinux-5.15.0-126-generic > vmlinux-5.15.0-126-generic.json```
@@ -78,7 +78,40 @@ https://github.com/volatilityfoundation/volatility3
     - Create a folder ('python') in /path/to/volatility3/framework/symbols/generic/types/
     - Place the  (.json) file in the 'python' folder
 
+### 5. Place the Plugins:
+ #### For Linux Plugins:
+   Copy the  plugins and the Core scripts to the Volatility Linux plugin directory (e.g., ```/path/to/volatility3/volatility3/framework/plugins/linux/```).
+ #### For Windows Plugins:
+    Copy the  plugins and the Core scripts to the Volatility Linux plugin directory (e.g., ```/path/to/volatility3/volatility3/framework/plugins/linux/```).
 
+---
+
+# Usage
+Generate a full SBOM from a memory dump:
+bashpython3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162
+Generate SBOM with dependency graph:
+bashpython3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
+Speed options — skip slow discovery methods when the interpreter source is sufficient:
+bash# Skip heap scanning (fastest)
+python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap
+
+# Skip GC walking
+python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc
+
+# Interpreter-only (fastest, may miss hidden modules)
+python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc --skip-heap
+Run individual components for targeted analysis:
+bash# Extract all modules across the process tree
+python3 vol.py -f dump.vmem linux.module_extractor.Module_Extractor --pid 22162
+
+# Walk GC lists for a single process
+python3 vol.py -f dump.vmem linux.py_gc.Py_GC --pid 22162
+
+# Scan heap for hidden/unlinked modules
+python3 vol.py -f dump.vmem linux.py_heap.Py_Heap --pid 22162
+
+# Dump interpreter state (sys.modules)
+python3 vol.py -f dump.vmem linux.py_interpreter.Py_Interpreter --pid 22162
 # Repository Structure
 
 The repository is organized into several directories that contain the MEM-SBOM plugins, supporting components, and example outputs.
