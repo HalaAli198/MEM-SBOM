@@ -131,18 +131,18 @@ The repository is organized into several directories that contain the MEM-SBOM p
 - **bytecode_decoder.py**  
   Handles CPython bytecode decoding across multiple Python versions.
 
-## Python_handlers
+## Python Handlers
 Per-version memory structure definitions for CPython 3.6–3.14.
 Each handler defines how to read and interpret CPython internal structs
 (PyDictObject, PyCodeObject, PyGC_Head, etc.) from raw process memory.
 
 
-## Symbol_Tables 
+## Symbol Tables 
 ISF JSON files generated from CPython debug symbols via dwarf2json.
 Define the struct layouts (field offsets, sizes, types) for each CPython
 version's internal objects (PyObject, PyInterpreterState, PyCodeObject, etc.).
 
-## Linux_Plugins
+## Linux Plugins
 This directory contains the **Windows versions of the MEM-SBOM plugins**.
 
 - **mem_sbom.py**  
@@ -166,7 +166,7 @@ This directory contains the **Windows versions of the MEM-SBOM plugins**.
 
 ---
 
-## Windows_Plugins
+## Windows Plugins
 
 This directory contains the **Windows versions of the MEM-SBOM plugins**.
 - **mem_sbom.py**  
