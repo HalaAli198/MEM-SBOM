@@ -131,26 +131,26 @@ The repository is organized into several directories that contain the MEM-SBOM p
   Handles CPython bytecode decoding across multiple Python versions.
 
 ## Python_handlers
-python36_handler.py
-python37_handler.py
-python38_handler.py
-python39_handler.py
-python310_handler.py
-python311_handler.py
-python312_handler.py
-python313_handler.py
-python314_handler.py
+- python36_handler.py
+- python37_handler.py
+- python38_handler.py
+- python39_handler.py
+- python310_handler.py
+- python311_handler.py
+- python312_handler.py
+- python313_handler.py
+- python314_handler.py
 
 ## Symbol_Tables
-python36.json
-python37.json
-python38.json
-python39.json
-python310.json
-python311.json
-python312.json
-python313.json
-python314.json
+- python36.json
+- python37.json
+- python38.json
+- python39.json
+- python310.json
+- python311.json
+- python312.json
+- python313.json
+- python314.json
 
 ## Linux_Plugins
 This directory contains the **Volatility 3 plugins for Linux memory analysis**.  
