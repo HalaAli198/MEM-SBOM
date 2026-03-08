@@ -1,13 +1,11 @@
 # MEM-SBOM: Runtime SBOM Generation from Python Process Memory
-This tool accompanies the paper:
-"What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security"  
-(under review at *Computers & Security*).
+- This tool accompanies the paper: "What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security"  (under review at *Computers & Security*).
 
-Most SBOM tools rely on package metadata or what is installed on the system, which may not reflect what a Python application actually executes.
+- Most SBOM tools rely on package metadata or what is installed on the system, which may not reflect what a Python application actually executes.
 
-MEM-SBOM generates **Software Bills of Materials (SBOMs) directly from Python process memory**. By analyzing the garbage collector lists, interpreter state and heap objects, it recovers the modules that were truly loaded at runtime, resolves their versions, and produces a **CycloneDX SBOM**.
+- MEM-SBOM generates **Software Bills of Materials (SBOMs) directly from Python process memory**. By analyzing the garbage collector lists, interpreter state and heap objects, it recovers the modules that were truly loaded at runtime, resolves their versions, and produces a **CycloneDX SBOM**.
 
-This allows investigators to recover an accurate SBOM even when the original system is no longer running, such as after crashes, corruption, or destructive attacks.
+- This allows investigators to recover an accurate SBOM even when the original system is no longer running, such as after crashes, corruption, or destructive attacks.
 
 ---
 
