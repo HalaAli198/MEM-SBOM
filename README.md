@@ -1,4 +1,7 @@
 # MEM-SBOM: Runtime SBOM Generation from Python Process Memory
+This tool accompanies the paper:
+"What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security"  
+(under review at *Computers & Security*).
 
 Most SBOM tools rely on package metadata or what is installed on the system, which may not reflect what a Python application actually executes.
 
