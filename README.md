@@ -153,7 +153,7 @@ Define the struct layouts (field offsets, sizes, types) for each CPython
 version's internal objects (PyObject, PyInterpreterState, PyCodeObject, etc.).
 
 ## Linux Plugins
-This directory contains the **Windows versions of the MEM-SBOM plugins**.
+This directory contains the **Linux versions of the MEM-SBOM plugins**.
 
 - **mem_sbom.py**  
   Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
