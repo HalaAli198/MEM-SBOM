@@ -4,7 +4,7 @@
 
 - It extracts runtime modules from Python interpreter structures, garbage-collector lists, and heap objects, then generates CycloneDX SBOMs and dependency graphs from the recovered runtime state.
 
-- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, particularly when the original system is no longer live or its filesystem artifacts cannot be trusted.
+- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, pparticularly when the original system is no longer accessible or its filesystem artifacts cannot be trusted.
 
 ---
 
