@@ -61,7 +61,7 @@ MEM-SBOM implements the techniques described in:
 ## 1.Clone this repository
   git clone https://github.com/HalaAli198/MEM-SBOM.git
 
-## 12. Install Volatility 3
+## 2. Install Volatility 3
   Since MEM-SBOM plugins are built on top of the **Volatility 3 Framework**: Clone the Volatility3 repository and follow the installation instructions at:
 https://github.com/volatilityfoundation/volatility3
 
