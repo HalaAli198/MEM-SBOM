@@ -346,7 +346,7 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
 
         if not all_modules:
             print("  ERROR: No modules extracted")
-            return [], []
+            return [], [], {}
 
         # ----------------------------------------------------------
         # Step 2: Find sys module → parse path_importer_cache
