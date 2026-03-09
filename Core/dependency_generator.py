@@ -1,6 +1,5 @@
 from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
-from volatility3.plugins.linux import pslist
 import re
 import dis
 import hashlib

@@ -70,7 +70,7 @@ SYMBOL_TABLE_REGISTRY = {
     ),
     (3, 13): (
         'volatility3.framework.symbols.generic.types.python.python313_handler',
-        'Python_3_12_IntermedSymbols',
+        'Python_3_13_IntermedSymbols',
         'generic/types/python',
         'python313',
     ),

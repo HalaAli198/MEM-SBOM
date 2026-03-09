@@ -1,10 +1,13 @@
+
+import logging
+from typing import Dict, List, Optional, Tuple
+
 from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
-from volatility3.plugins.linux import pslist
-from volatility3.plugins.linux.proc import Maps
-from volatility3.plugins.linux import elf_parsing
-import struct
-import re
+from volatility3.plugins.windows import pslist
+from volatility3.plugins.windows import pe_parsing
+
+vollog = logging.getLogger(__name__)
 
 # Brute-force heap scanner for Python objects.
 #
@@ -14,6 +17,7 @@ import re
 #
 # Returns (address, name, PyModuleObject) tuples, same shape as
 # Py_Interpreter and Py_GC so Module_Extractor can merge everything.
+
 
 # Maps (major, minor) -> ISF symbol table loader parameters
 SYMBOL_TABLE_REGISTRY = {
@@ -79,15 +83,16 @@ MAX_REASONABLE_REFCOUNT = 1_000_000
 # md_dict.ma_used sanity bound — even huge apps rarely exceed this
 MAX_DICT_USED = 100_000
 
-# Cap per-region scan to avoid spending forever on giant anon mappings.
+# Cap per-region scan to avoid spending forever on giant mappings.
 # Anything larger gets split into head + tail chunks.
 MAX_REGION_SCAN_BYTES = 100 * 1024 * 1024  # 100 MB
 
 # CPython allocates all PyObjects on 8-byte boundaries
 PTR_SIZE = 8
 
+
 class Py_Heap(interfaces.plugins.PluginInterface):
-    """Scan heap/anon regions for Python objects (3.6-3.14)."""
+    """Scan heap/private memory regions for Python objects (Windows, 3.6-3.14)."""
     _version = (2, 0, 0)
     _required_framework_version = (2, 0, 0)
 
@@ -96,7 +101,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return [
             requirements.ModuleRequirement(
                 name="kernel",
-                description="Linux kernel",
+                description="Windows kernel",
                 architectures=["Intel64"],
             ),
             requirements.ListRequirement(
@@ -112,25 +117,17 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def detect_python_version(self, task):
         """
-        Extract Python major.minor from libpythonX.Y.so or /usr/bin/pythonX.Y
-        in the process VMA list. Returns (major, minor) or None.
+        Extract Python major.minor from loaded DLLs in the process VADs.
+        Uses pe_parsing's single-process VAD scanning.
+
+        Returns (major, minor) or None.
         """
-        try:
-            for vma in task.mm.get_vma_iter():
-                fname = vma.get_name(self.context, task)
-                if not fname:
-                    continue
-                if 'libpython' in fname:
-                    m = re.search(r'libpython(\d+)\.(\d+)', fname)
-                    if m:
-                        return (int(m.group(1)), int(m.group(2)))
-                elif '/python' in fname:
-                    m = re.search(r'python(\d+)\.(\d+)', fname)
-                    if m:
-                        return (int(m.group(1)), int(m.group(2)))
-        except Exception:
-            pass
-        return None
+        version = pe_parsing.detect_python_version_from_vads(self.context, task)
+        if version:
+            vollog.info(f"Detected Python {version[0]}.{version[1]}")
+        else:
+            vollog.warning("Could not detect Python version from process VADs")
+        return version
 
     # ------------------------------------------------------------------
     # Symbol table loading
@@ -140,7 +137,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         key = version[:2]
         entry = SYMBOL_TABLE_REGISTRY.get(key)
         if not entry:
-            print(f"No symbol table for Python {key[0]}.{key[1]}")
+            vollog.error(f"No symbol table for Python {key[0]}.{key[1]}")
             return None
 
         import_path, class_name, sub_path, filename = entry
@@ -152,47 +149,78 @@ class Py_Heap(interfaces.plugins.PluginInterface):
             sub_path=sub_path,
             filename=filename,
         )
-        print(f"Loaded symbol table: {class_name} -> {table_name}")
+        vollog.info(f"Loaded symbol table: {class_name} -> {table_name}")
         return table_name
 
     # ------------------------------------------------------------------
-    # Memory region enumeration
+    # Memory region enumeration (Windows VADs)
     # ------------------------------------------------------------------
     def _get_scannable_regions(self, task):
-        """
-        Collect r/w VMAs worth scanning: [heap], anonymous mappings,
-        libpython, and the python binary itself.
-        """
-        regions = []
-        for vma in Maps.list_vmas(task):
-            flags = vma.get_protection()
-            if 'r' not in flags or 'w' not in flags:
+      """
+      Collect r/w VADs worth scanning: private memory, heap,
+      and python DLL regions.
+      """
+      regions = []
+
+      # Windows VAD protection constants (from _MMVAD_FLAGS.Protection)
+      # 4 = READWRITE, 5 = WRITECOPY, 6 = EXECUTE_READWRITE, 7 = EXECUTE_WRITECOPY
+      RW_PROTECTIONS = {4, 5, 6, 7}
+
+      try:
+        for vad in task.get_vad_root().traverse():
+            try:
+                start = vad.get_start()
+                end = vad.get_end()
+                size = end - start
+
+                # Skip tiny or impossibly large regions
+                if size < 0x1000 or size > 512 * 1024 * 1024:
+                    continue
+
+                # We need at least read+write access
+                protect = int(vad.Protection)
+                if protect not in RW_PROTECTIONS:
+                    continue
+
+                # Get the file path if this is a mapped file
+                try:
+                    file_path = vad.get_file_name()
+                except Exception:
+                    file_path = None
+
+                path_str = str(file_path) if file_path else "Private"
+
+                # Treat "N/A" as private/anonymous memory
+                is_private = (file_path is None or path_str == "N/A")
+
+                # heap, anon, python DLLs - all fair game
+                is_interesting = (
+                    is_private
+                    or 'python' in path_str.lower()
+                )
+
+                if not is_interesting:
+                    continue
+
+                if is_private:
+                    path_str = "Private"
+
+                regions.append({
+                    'start': start,
+                    'end': end,
+                    'size': size,
+                    'flags': str(protect),
+                    'path': path_str,
+                })
+
+            except Exception as e:
+                vollog.debug(f"Error processing VAD entry: {e}")
                 continue
 
-            path = vma.get_name(self.context, task) or ''
+      except Exception as e:
+        vollog.warning(f"Error traversing VAD tree: {e}")
 
-            # heap, anon, libpython, python binary - all fair game
-            is_interesting = (
-                path == '[heap]'
-                or path == 'Anonymous Mapping'
-                or not path
-                or '.so' in path
-                or 'python' in path.lower()
-            )
-            if not is_interesting:
-                continue
-
-            start = vma.vm_start
-            end = vma.vm_end
-            regions.append({
-                'start': start,
-                'end': end,
-                'size': end - start,
-                'flags': flags,
-                'path': path or 'Anonymous',
-            })
-
-        return regions
+      return regions
 
     # ------------------------------------------------------------------
     # PyObject header validation
@@ -296,7 +324,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 pass
 
         except Exception as e:
-            print(f"  Error extracting module at 0x{addr:x}: {e}")
+            vollog.debug(f"Error extracting module at 0x{addr:x}: {e}")
 
         return info
 
@@ -308,16 +336,13 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         Linear scan looking for PyObject headers (ob_refcnt, ob_type).
         type_ptr -> name is cached so each unique type is resolved once.
         """
-        proc_layer_name = task.add_process_layer()
-        layer = self.context.layers[proc_layer_name]
+        layer = self.context.layers[self.process_layer]
 
         start = region['start']
         end = region['end']
         results = []
 
-        
-        type_cache = {} # type_ptr -> type_name (or None)
-        module_type_ptrs = set()
+        type_cache = {}  # type_ptr -> type_name (or None)
 
         scan_count = 0
         addr = start
@@ -336,7 +361,6 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 addr += PTR_SIZE
                 continue
 
-           
             if type_ptr in type_cache:
                 type_name = type_cache[type_ptr]
             else:
@@ -347,15 +371,12 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 addr += PTR_SIZE
                 continue
 
-            
             if type_filter and type_name != type_filter:
                 addr += PTR_SIZE
                 scan_count += 1
                 continue
 
-           
             if type_name == 'module':
-                module_type_ptrs.add(type_ptr)
                 if self._validate_module(addr, layer):
                     info = self._extract_module_info(addr, layer)
                     results.append((addr, type_name, info))
@@ -371,23 +392,28 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return results
 
     # ------------------------------------------------------------------
-    #  Public API — get_modules (for Module_Extractor)
+    # Public API — get_modules (for Module_Extractor)
     # ------------------------------------------------------------------
     def get_modules(self, task, python_table_name):
         """
-        Scan heap/anon regions for module objects.
+        Scan heap/private regions for module objects.
         Returns list of (address, name, PyModuleObject) tuples.
         """
-        proc_layer_name = task.add_process_layer()
+        try:
+            proc_layer_name = task.add_process_layer()
+        except exceptions.InvalidAddressException:
+            vollog.error("Cannot create process layer")
+            return []
+
         self.process_layer = self.context.layers[proc_layer_name].name
         self._py_table = python_table_name
 
         regions = self._get_scannable_regions(task)
         if not regions:
-            print("No scannable regions found")
+            vollog.warning("No scannable regions found")
             return []
 
-        print(f"Heap scanner: {len(regions)} regions to scan")
+        vollog.info(f"Heap scanner: {len(regions)} regions to scan")
 
         modules = []
         seen_addrs = set()
@@ -406,7 +432,6 @@ class Py_Heap(interfaces.plugins.PluginInterface):
 
                     # Build the actual PyModuleObject for the caller
                     try:
-                        layer = self.context.layers[self.process_layer]
                         mod_obj = self.context.object(
                             object_type=python_table_name + constants.BANG + "PyObject",
                             layer_name=self.process_layer,
@@ -416,17 +441,22 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                         mod_name = info.get('name', 'Unknown')
                         modules.append((addr, str(mod_name), mod_obj))
                     except Exception as e:
-                        print(f"  Error casting module at 0x{addr:x}: {e}")
+                        vollog.debug(f"Error casting module at 0x{addr:x}: {e}")
 
-        print(f"Heap scanner found {len(modules)} unique modules")
+        vollog.info(f"Heap scanner found {len(modules)} unique modules")
         return modules
 
     # ------------------------------------------------------------------
-    #  Public API — get_all_objects (generic scanner)
+    # Public API — get_all_objects (generic scanner)
     # ------------------------------------------------------------------
     def get_all_objects(self, task, python_table_name, type_filter=None):
         """Scan heap for all objects, optionally filtered by type name."""
-        proc_layer_name = task.add_process_layer()
+        try:
+            proc_layer_name = task.add_process_layer()
+        except exceptions.InvalidAddressException:
+            vollog.error("Cannot create process layer")
+            return []
+
         self.process_layer = self.context.layers[proc_layer_name].name
         self._py_table = python_table_name
 
@@ -448,13 +478,13 @@ class Py_Heap(interfaces.plugins.PluginInterface):
         return all_results
 
     # ------------------------------------------------------------------
-    # Region splitting for oversized VMAs
+    # Region splitting for oversized VADs
     # ------------------------------------------------------------------
     def _split_region(self, region):
         """
         Split regions larger than MAX_REGION_SCAN_BYTES into head + tail
         chunks. Most Python objects live near the start or end of large
-        anonymous mappings.
+        private memory regions.
         """
         if region['size'] <= MAX_REGION_SCAN_BYTES:
             return [region]
@@ -473,24 +503,44 @@ class Py_Heap(interfaces.plugins.PluginInterface):
             'flags': region['flags'],
             'path': region['path'] + ' (tail)',
         }
-        print(f"  Splitting oversized region ({region['size']:,} bytes) into head+tail")
+        vollog.info(f"Splitting oversized region ({region['size']:,} bytes) into head+tail")
         return [head, tail]
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def read_cstring(self, address, max_length=256):
+        """Read a null-terminated C string from the process memory layer."""
+        try:
+            data = self.context.layers[self.process_layer].read(
+                address, max_length, pad=False
+            )
+            return data.split(b'\x00', 1)[0].decode('utf-8', errors='replace')
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------
     # Standalone execution
     # ------------------------------------------------------------------
-    def _collect_data(self, tasks):
+    def _collect_data(self, processes):
         """Standalone mode: detect version, load symbols, scan for modules."""
-        task = list(tasks)[0]
-        if not task or not task.mm:
+        task = next(iter(processes), None)
+        if not task:
+            return []
+
+        # Windows: no task.mm check — use add_process_layer instead
+        try:
+            task.add_process_layer()
+        except exceptions.InvalidAddressException:
+            vollog.error("Cannot create process layer")
             return []
 
         version = self.detect_python_version(task)
         if not version:
-            print("Could not detect Python version")
+            vollog.error("Could not detect Python version")
             return []
 
-        print(f"Detected Python {version[0]}.{version[1]}")
+        vollog.info(f"Detected Python {version[0]}.{version[1]}")
 
         self._py_table = self._load_symbol_table(version)
         if not self._py_table:
@@ -509,14 +559,16 @@ class Py_Heap(interfaces.plugins.PluginInterface):
             ))
 
     def run(self):
-        filter_func = pslist.PsList.create_pid_filter(self.config.get("pid", None))
-        tasks = pslist.PsList.list_tasks(
+        filter_func = pslist.PsList.create_pid_filter(
+            self.config.get("pid", None)
+        )
+        processes = pslist.PsList.list_processes(
             self.context,
             self.config["kernel"],
             filter_func=filter_func,
         )
 
-        collected_data = self._collect_data(tasks)
+        collected_data = self._collect_data(processes)
 
         return renderers.TreeGrid(
             [
