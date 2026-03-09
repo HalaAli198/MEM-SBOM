@@ -67,7 +67,7 @@ https://github.com/volatilityfoundation/volatility3
 
 ## 3. Install the dwarf2json Tool
 -  Use the `dwarf2json` tool to generate Python symbol tables suitable for Linux and Python internals.
-- Clone the dwarf2json repository, place it in the Volaitlity 3 directory, and follow the installation instructions at:
+- Clone the dwarf2json repository, place it in the Volatility 3 directory, and follow the installation instructions at:
  https://github.com/volatilityfoundation/dwarf2json
 
  ### 4. Generate Symbol Tables
@@ -104,7 +104,7 @@ https://github.com/volatilityfoundation/volatility3
 ### Generate SBOM with dependency graph:
 bash python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
 
-### Skip sournces depends on the investigator's requirments:
+### Skip sources depends on the investigator's requirements:
 - Skip heap scanning (fastest)
 ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap```
 
