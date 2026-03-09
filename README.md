@@ -2,16 +2,33 @@
 
 - MEM-SBOM is a Volatility 3–based memory forensics tool that reconstructs Software Bills of Materials (SBOMs) directly from Python process memory.
 
-- Traditional SBOM tools rely on package metadata or filesystem artifacts, which often fail to reflect what a Python application actually loaded and executed at runtime. MEM-SBOM recovers runtime modules from Python interpreter internals, garbage-collector structures, and heap memory, then generates a CycloneDX SBOM and dependency graph from the recovered runtime state.
+- It extracts runtime modules from Python interpreter structures, garbage-collector lists, and heap objects, then generates CycloneDX SBOMs and dependency graphs from the recovered runtime state.
 
-- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, especially when the original system is no longer live or has been tampered with after compromise.
+- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, particularly when the original system is no longer live or its filesystem artifacts cannot be trusted.
 
 ---
 
+## Why MEM-SBOM?
 
+- Most existing SBOM tools rely on package metadata or filesystem artifacts, which may not accurately reflect what a Python application actually loaded and executed at runtime.
+
+- Runtime SBOM approaches attempt to observe components as they load during execution, but they require the system to remain live and observable.
+
+- In Python, the runtime dependency set can differ significantly from installed packages because modules may be introduced through dynamic imports, lazy loading, custom loaders, or multi-process execution.
+
+---
+## Research Basis
+
+MEM-SBOM implements the techniques described in:
+
+**What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security**  
+Hala Ali, Andrew Case, Irfan Ahmed  
+Under review at *Computers & Security*
+
+---
 ## Key Capabilities
-- **Three-source module discovery**
-   Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module — including hidden, unlinked, and GC-untracked objects.
+- **Multi-layer module extraction**
+   Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module, including hidden, unlinked, and GC-untracked objects.
 
  - **Cross-process extraction**
     Automatically discovers child processes (workers, forks) and merges module lists across the entire application tree.
