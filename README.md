@@ -35,7 +35,7 @@ MEM-SBOM implements the techniques described in:
 
 - **CycloneDX SBOM output**    Produces standards-compliant SBOMs (components, dependency relationships, and memory-extraction provenance) that can be integrated with existing vulnerability and supply-chain analysis tools.
 
-- **Python 3.6–3.14 support** Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
+- **Python 3.6–3.15 support** Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
 
 - **Cross-platform analysis pipeline**  Supports both Linux and Windows Operating Systems.
 
@@ -136,7 +136,7 @@ The repository is organized into several directories that contain the MEM-SBOM p
   Handles CPython bytecode decoding across multiple Python versions.
 
 ## Python Handlers
-Per-version memory structure definitions for CPython 3.6–3.14.
+Per-version memory structure definitions for CPython 3.6–3.15.
 Each handler defines how to read and interpret CPython internal structs
 (PyDictObject, PyCodeObject, PyGC_Head, etc.) from raw process memory.
 
