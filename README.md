@@ -1,10 +1,10 @@
 # MEM-SBOM: Runtime SBOM Generation from Python Process Memory
 
-- MEM-SBOM is a Volatility 3–based memory forensics tool that reconstructs Software Bills of Materials (SBOMs) directly from Python process memory.
+- MEM-SBOM is a memory forensics tool implemented as a suite of Volatility 3 plugins  that reconstructs Software Bills of Materials (SBOMs) directly from Python process memory.
 
-- It extracts runtime modules from Python interpreter structures, garbage-collector lists, and heap objects, then generates CycloneDX SBOMs and dependency graphs from the recovered runtime state.
+- It extracts runtime modules from Python interpreter structures, garbage-collector lists, and heap regions, resolves package versions, analyzes Python bytecode to reconstruct dependency relationships, and serializes the results into CycloneDX-compliant SBOMs.
 
-- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, pparticularly when the original system is no longer accessible or its filesystem artifacts cannot be trusted.
+- This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, particularly when the original system is no longer accessible or its filesystem artifacts cannot be trusted.
 
 ---
 
@@ -24,26 +24,20 @@ MEM-SBOM implements the techniques described in:
 
 ---
 ## Key Capabilities
-- **Multi-layer module extraction**
-   Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module, including hidden, unlinked, and GC-untracked objects.
+- **Multi-layer module extraction** Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module, including hidden, unlinked, and GC-untracked objects.
 
- - **Cross-process extraction**
-    Automatically discovers child processes (workers, forks) and merges module lists across the entire application tree.
+ - **Cross-process extraction**  Automatically discovers child processes (workers, forks) and merges module lists across the entire application tree.
 
-  - **Version extraction from live objects** 
-    Reads __version__, VERSION, version_info and other attributes directly from module dicts in memory, with fallback to installed package metadata
+  - **Version extraction from live objects**  Reads __version__, VERSION, version_info and other attributes directly from module dicts in memory, with fallback to installed package metadata.
+  
+  - **Dependency graph generation**  Analyzes function bytecode (IMPORT_NAME, IMPORT_FROM, CALL targets), module dicts, class hierarchies, and func_module pointers to build a complete dependency graph.
 
-- **Memory-based SBOM generation** Generates Software Bills of Materials directly from Python process memory rather than relying on package metadata.
-
-- **Dependency graph generation** Analyzes function bytecode (IMPORT_NAME, IMPORT_FROM, CALL targets), module dicts, class hierarchies, and func_module pointers to build a complete dependency graph.
 
 - **CycloneDX SBOM output**    Produces standards-compliant SBOMs (components, dependency relationships, and memory-extraction provenance) that can be integrated with existing vulnerability and supply-chain analysis tools.
 
-- **Python 3.6–3.14 support**
-   Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
+- **Python 3.6–3.14 support** Version-aware bytecode decoder, GC layout handling (generational → incremental), and interpreter state resolution across all modern CPython versions.
 
 - **Cross-platform analysis pipeline**  Supports both Linux and Windows Operating Systems.
-
 
 
  --- 
@@ -100,9 +94,9 @@ https://github.com/volatilityfoundation/volatility3
 
 # Usage
 ### Generate a full SBOM from a memory dump:
-``` python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162```
+``` python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162``` 
 ### Generate SBOM with dependency graph:
-bash python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep
+ ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep```
 
 ### Skip sources depends on the investigator's requirements:
 - Skip heap scanning (fastest)
