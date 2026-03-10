@@ -191,6 +191,7 @@ This directory contains the **Windows versions of the MEM-SBOM plugins**.
 - **pe_parsing.py**  
   Helper plugin used to locate the `_PyRuntime` symbol inside PE binaries during analysis.
 
+---
+## Examples
 
-
-   
+The `Examples/` directory contains MEM-SBOM output from two real-world Python applications with multi-process architectures (Celery and Apache Airflow), including full pipeline output and generated CycloneDX SBOMs. See the [Examples README](Examples/README.md) for details.
