@@ -74,7 +74,7 @@ SYMBOL_TABLE_REGISTRY = {
 }
 
 # Refcount > 1M is almost certainly garbage, not a real object
-MAX_REASONABLE_REFCOUNT = 1_000_000
+MAX_REASONABLE_REFCOUNT = (2**32) - 1
 
 # md_dict.ma_used sanity bound — even huge apps rarely exceed this
 MAX_DICT_USED = 100_000
@@ -233,8 +233,11 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     def _validate_module(self, addr, layer):
         """
-        Extra validation for module candidates: check that md_dict is
-        a readable PyDictObject with a sane ma_used count.
+        Extra validation for module candidates:
+          1. md_name must point at a real `str` object (modules always
+             have a str __name__; false positives almost never line one
+             up at this exact offset).
+          2. md_dict must be a readable `dict` with a sane ma_used count.
         """
         try:
             mod = self.context.object(
@@ -242,20 +245,37 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 layer_name=layer.name,
                 offset=addr,
             )
+
+            # --- md_name must be a str -----------------------------------
+            md_name_ptr = int(mod.md_name)
+            if md_name_ptr < 0x1000 or not layer.is_valid(md_name_ptr, 16):
+                return False
+            name_obj = self.context.object(
+                object_type=self._py_table + constants.BANG + "PyObject",
+                layer_name=layer.name,
+                offset=md_name_ptr,
+            )
+            if name_obj.get_type_name() != 'str':
+                return False
+
+            # --- md_dict must be a readable dict -------------------------
             md_dict_ptr = int(mod.md_dict)
             if md_dict_ptr < 0x1000 or not layer.is_valid(md_dict_ptr, 24):
                 return False
-
-            d = self.context.object(
-                object_type=self._py_table + constants.BANG + "PyDictObject",
+            d_obj = self.context.object(
+                object_type=self._py_table + constants.BANG + "PyObject",
                 layer_name=layer.name,
                 offset=md_dict_ptr,
             )
+            if d_obj.get_type_name() != 'dict':
+                return False
+
+            d = d_obj.cast_to("PyDictObject")
             used = int(d.ma_used)
             return 0 <= used <= MAX_DICT_USED
         except Exception:
             return False
-
+            
     def _extract_module_info(self, addr, layer):
         """Pull name, __file__, __version__, __package__ from a validated module."""
         info = {
