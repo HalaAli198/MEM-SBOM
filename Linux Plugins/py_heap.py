@@ -2,7 +2,6 @@ from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
 from volatility3.plugins.linux import pslist
 from volatility3.plugins.linux.proc import Maps
-from volatility3.plugins.linux import elf_parsing
 import struct
 import re
 
