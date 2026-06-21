@@ -24,8 +24,7 @@ MEM-SBOM implements the techniques described in:
 
 ---
 ## Key Capabilities
-- **Multi-layer module extraction** Combines interpreter state (sys.modules), GC linked-list walking, and brute-force heap scanning to find every loaded Python module, including hidden, unlinked, and GC-untracked objects.
-
+- **Multi-layer module extraction** Combines interpreter state (sys.modules), thread call-stack walking, GC linked-list walking, and brute-force heap scanning to find every loaded Python module, including actively executing, hidden, unlinked, and GC-untracked objects.
  - **Cross-process extraction**  Automatically discovers child processes (workers, forks) and merges module lists across the entire application tree.
 
   - **Version extraction from live objects**  Reads __version__, VERSION, version_info and other attributes directly from module dicts in memory, with fallback to installed package metadata.
@@ -99,6 +98,9 @@ https://github.com/volatilityfoundation/volatility3
  ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --dep```
 
 ### Skip sources depends on the investigator's requirements:
+- Skip stack walking
+`````python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-stack```
+
 - Skip heap scanning (fastest)
 ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap```
 
@@ -106,11 +108,17 @@ https://github.com/volatilityfoundation/volatility3
 ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc```
 
 - Interpreter-only (fastest, may miss hidden modules)
-```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-gc --skip-heap```
+```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-stack --skip-gc --skip-heap```
 
 ### Run individual components for targeted analysis:
 - Extract all modules across the process tree
 ```python3 vol.py -f dump.vmem linux.module_extractor.Module_Extractor --pid 22162```
+
+-  Walk the interpreter's registry (sys.modules)
+```python3 vol.py -f dump.vmem linux.py_interpreter.Py_Interpreter --pid 22162```
+
+-   Walk Python thread call stacks to identify modules with actively executing code at acquisition time.
+```python3 vol.py -f dump.vmem linux.py_stack.Py_Stack --pid 22162```
 
 -  Walk GC lists for a single process
 ```python3 vol.py -f dump.vmem linux.py_gc.Py_GC --pid 22162```
@@ -118,8 +126,6 @@ https://github.com/volatilityfoundation/volatility3
 -  Scan heap for hidden/unlinked modules
 ```python3 vol.py -f dump.vmem linux.py_heap.Py_Heap --pid 22162```
 
--  Dump interpreter state (sys.modules)
-```python3 vol.py -f dump.vmem linux.py_interpreter.Py_Interpreter --pid 22162```
 
 ---
 # Repository Structure
@@ -153,11 +159,14 @@ This directory contains the **Linux versions of the MEM-SBOM plugins**.
   Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
 
 - **module_extractor.py**  
-  Discovers Python modules from process memory using multiple sources (GC, interpreter registry, and heap).
+  Discovers Python modules from process memory using multiple sources (interpreter registry, call stacks, GC, and heap).
 
 
 - **py_interpreter.py**  
   Extracts modules registered in the interpreter (`sys.modules`).
+
+  - **py_stack.py**  
+  Walks Python thread call stacks to identify modules with actively executing code at acquisition time.
 
 - **py_gc.py**  
   Walks Python garbage collector structures to locate tracked Python objects.
@@ -177,10 +186,13 @@ This directory contains the **Windows versions of the MEM-SBOM plugins**.
   Main orchestrator plugin. Runs the full pipeline and generates the final SBOM output.
 
 - **module_extractor.py**  
-  Discovers Python modules from process memory using multiple sources (GC, interpreter registry, and heap).
+  Discovers Python modules from process memory using multiple sources (interpreter registry, call stacks, GC, and heap).
 
 - **py_interpreter.py**  
   Extracts modules registered in the interpreter (`sys.modules`).
+
+- **py_stack.py**  
+  Walks Python thread call stacks to identify modules with actively executing code at acquisition time.
 
 - **py_gc.py**  
   Walks Python garbage collector structures to locate tracked Python objects.
