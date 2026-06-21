@@ -45,6 +45,12 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
                 optional=True,
             ),
             requirements.BooleanRequirement(
+                name="skip_stack",
+                description="Skip stack walking (runtime-execution overlay)",
+                default=False,
+                optional=True,
+            ),
+            requirements.BooleanRequirement(
                 name="skip_gc",
                 description="Skip GC linked list walking",
                 default=False,

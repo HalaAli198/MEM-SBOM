@@ -9,7 +9,7 @@ import re
 # Application-level Python module extractor.
 #
 # Given a root PID, finds all descendant processes, identifies which
-# ones are Python, runs py_interpreter + py_gc + py_heap on each, and
+# ones are Python, runs py_interpreter+ py_stack + py_gc + py_heap on each, and
 # produces a unified deduplicated module list for the whole application.
 #
 # Two-level deduplication:
@@ -98,6 +98,12 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             requirements.BooleanRequirement(
                 name="skip_interp",
                 description="Skip interpreter (sys.modules) extraction",
+                default=False,
+                optional=True,
+            ),
+            requirements.BooleanRequirement(
+                name="skip_stack",
+                description="Skip stack walking (runtime-execution overlay)",
                 default=False,
                 optional=True,
             ),
@@ -221,7 +227,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
         from volatility3.plugins.linux.py_gc import Py_GC
         from volatility3.plugins.linux.py_heap import Py_Heap
         from volatility3.plugins.linux.py_interpreter import Py_Interpreter
-
+        from volatility3.plugins.linux.py_stack import Py_Stack
         pid = task.pid
         comm = utility.array_to_string(task.comm)
 
@@ -251,7 +257,19 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
           except Exception as e:
             print(f"    interpreter error: {e}")
 
-        # --- 2. GC walker (catches GC-tracked objects not in sys.modules) ---
+        # --- 2. Stack walker (modules with live frames at capture time) ---
+        stack_count = 0
+        if not self.config.get("skip_stack", False):
+          try:
+             
+             stack_plugin = Py_Stack(self.context, self.config_path)
+             stack_modules = stack_plugin.get_modules(task, python_table_name)
+             stack_count = _merge_results(stack_modules, 'stack')
+             print(f"    stack: {len(stack_modules)} found, {stack_count} new")
+          except Exception as e:
+             print(f"    stack error: {e}")
+        
+        # --- 3. GC walker (catches GC-tracked objects not in sys.modules) ---
         gc_count = 0
         if not self.config.get("skip_gc", False):
           try:
@@ -262,7 +280,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
           except Exception as e:
             print(f"    gc error: {e}")
 
-        # --- 3. Heap scanner (brute force, catches untracked/unlinked objects) ---
+        # --- 4. Heap scanner (brute force, catches untracked/unlinked objects) ---
         
         heap_count = 0
         if not self.config.get("skip_heap", False):
@@ -274,6 +292,7 @@ class Module_Extractor(interfaces.plugins.PluginInterface):
             except Exception as e:
                 print(f"    heap error: {e}")
 
+        
         
         print(f"\n  --- PID {pid} ({comm}) combined ---")
         print(f"  unique addresses: {len(merged)}")
