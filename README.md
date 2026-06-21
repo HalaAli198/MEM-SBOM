@@ -2,7 +2,7 @@
 
 - MEM-SBOM is a memory forensics tool implemented as a suite of Volatility 3 plugins  that reconstructs Software Bills of Materials (SBOMs) directly from Python process memory.
 
-- It extracts runtime modules from Python interpreter structures, garbage-collector lists, and heap regions, resolves package versions, analyzes Python bytecode to reconstruct dependency relationships, and serializes the results into CycloneDX-compliant SBOMs.
+- It extracts runtime modules from Python interpreter structures, thread call stacks, garbage-collector lists, and heap regions, resolves package versions, analyzes Python bytecode to reconstruct dependency relationships, and serializes the results into CycloneDX-compliant SBOMs.
 
 - This makes MEM-SBOM useful for incident response, malware analysis, and software supply-chain investigations, particularly when the original system is no longer accessible or its filesystem artifacts cannot be trusted.
 
@@ -99,7 +99,7 @@ https://github.com/volatilityfoundation/volatility3
 
 ### Skip sources depends on the investigator's requirements:
 - Skip stack walking
-`````python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-stack```
+``` python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-stack```
 
 - Skip heap scanning (fastest)
 ```python3 vol.py -f dump.vmem linux.mem_sbom.MEM_SBOM --pid 22162 --skip-heap```
@@ -165,7 +165,7 @@ This directory contains the **Linux versions of the MEM-SBOM plugins**.
 - **py_interpreter.py**  
   Extracts modules registered in the interpreter (`sys.modules`).
 
-  - **py_stack.py**  
+- **py_stack.py**  
   Walks Python thread call stacks to identify modules with actively executing code at acquisition time.
 
 - **py_gc.py**  
