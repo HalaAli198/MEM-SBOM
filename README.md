@@ -1,3 +1,8 @@
+
+<p align="center">
+  <img src="assets/logo.png" alt="MEM-SBOM Logo" width="250">
+</p>
+
 # MEM-SBOM: Runtime SBOM Generation from Python Process Memory
 
 - MEM-SBOM is a memory forensics tool implemented as a suite of Volatility 3 plugins  that reconstructs Software Bills of Materials (SBOMs) directly from Python process memory.
