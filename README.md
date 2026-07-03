@@ -25,7 +25,9 @@
 ## Research Basis
 
 MEM-SBOM implements the techniques described in:
-**What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security**   Under review at *Computers & Security*
+
+[**What You See Is Not What You Execute: Memory-Based Runtime SBOM Generation for Supply Chain Security**](https://arxiv.org/abs/2606.22827)  
+Under review at *Computers & Security*.
 
 ---
 ## Key Capabilities
