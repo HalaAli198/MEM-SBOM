@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="assets/logo.png" alt="MEM-SBOM Logo" width="250">
+  <img src="assets/logo.png" alt="MEM-SBOM Logo" width="600">
 </p>
 
 # MEM-SBOM: Runtime SBOM Generation from Python Process Memory
