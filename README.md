@@ -83,7 +83,7 @@ https://github.com/volatilityfoundation/volatility3
     - Note: The symbol table depends on the Python version installed on the target system.
  3. Locate the debug build library: ``` find /usr/lib/debug -name "libpython3*.so*"```
  4. Generate the symbol file:
-    - Command: ```/dwarf2json linux --elf /path/to/libpython3*.so* > output_filename.json```
+    - Command: ```./dwarf2json linux --elf /path/to/libpython3*.so* > output_filename.json```
     - Example: Generate symbol table for Python3.8: ``` ./dwarf2json linux --elf /usr/lib/debug/usr/lib/libpython3.8d.so.1.0 > python_data_structures.json```
  5. Create the required directory and move the file:
     - Create a folder ('python') in /path/to/volatility3/framework/symbols/generic/types/
