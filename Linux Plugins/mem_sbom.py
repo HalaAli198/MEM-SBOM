@@ -439,6 +439,8 @@ class MEM_SBOM(interfaces.plugins.PluginInterface):
 
         for category in ('application', 'third-party'):
             for parent, entries in classified[category].items():
+                if parent == '__main__':
+                   continue
                 # Find the parent module entry
                 parent_entry = None
                 for entry in entries:
