@@ -133,6 +133,8 @@ class Module_Classifier:
             r'.*\.extern\..*',
             r'.*\.vendored\..*',
             r'^_distutils_hack$',
+            r'^cython_runtime$',          
+            r'^_cython_\d+_\d+_\d+$',
         ]
 
         # System/distro hooks — not stdlib proper, but not third-party either
