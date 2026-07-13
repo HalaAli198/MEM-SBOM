@@ -1,5 +1,6 @@
 from volatility3.framework import interfaces, renderers, constants, exceptions
 from volatility3.framework.configuration import requirements
+from volatility3.plugins.linux import pslist
 import re
 import dis
 import hashlib
@@ -28,7 +29,9 @@ class Dependency_Generator:
     """
 
     def __init__(self, python_version: Tuple[int, int] = (3, 8)):
-        self._analyzed_addrs: Set[int] = set()
+        self._callable_deps: Dict[int, Set[str]] = {}
+        self._code_cache: Dict[int, tuple] = {}
+        self._module_dict_cache: Dict[int, dict] = {}    
         self._python_version = python_version
 
     # ------------------------------------------------------------------
@@ -109,7 +112,7 @@ class Dependency_Generator:
     # Extract function-call targets with deep resolution
     # ------------------------------------------------------------------
     def _extract_call_modules(self, instructions: List[str],
-                              func_globals_dict: dict, parent_name: str = "") -> Set[str]:
+                          func_globals_dict: dict) -> Set[str]:
         """
         Walk bytecode to find CALL sites preceded by LOAD_GLOBAL →
         LOAD_ATTR / LOAD_METHOD chains.
@@ -124,7 +127,7 @@ class Dependency_Generator:
         modules: Set[str] = set()
         load_stack: List[str] = []
 
-        for raw in instructions:
+        for idx, raw in enumerate(instructions):
             parts = raw.split(' ', 1)
             opcode = parts[0]
             arg    = parts[1].strip() if len(parts) > 1 else ''
@@ -141,8 +144,7 @@ class Dependency_Generator:
                 if load_stack and func_globals_dict:
                     base = load_stack[0]
                     if base == '__import__' and len(load_stack) == 1:
-                       # Look back for the LOAD_CONST that has the module name
-                       idx = instructions.index(raw) if raw in instructions else -1
+                       # Look back for the LOAD_CONST that has the module name  
                        if idx > 0:
                           prev = instructions[idx - 1]
                           prev_parts = prev.split(' ', 1)
@@ -150,8 +152,7 @@ class Dependency_Generator:
                              mod_name = prev_parts[1].strip().strip("'\"")
                              if mod_name and not mod_name.startswith('<'):
                                 top = mod_name.split('.')[0]
-                                if top != parent_name:
-                                   modules.add(top)
+                                modules.add(top)
         
                     elif base in func_globals_dict:
                         base_obj  = func_globals_dict[base]
@@ -159,8 +160,7 @@ class Dependency_Generator:
 
                         if base_type == "module":
                             # Record the module itself
-                            if base != parent_name:
-                               modules.add(base)
+                            modules.add(base)
 
                             # Deep resolve: look up the called attribute
                             # inside the module dict to find the actual
@@ -219,7 +219,16 @@ class Dependency_Generator:
 
                 if current_type == "module":
                     mod = current.cast_to("PyModuleObject")
-                    mod_dict = mod.get_dict2()
+                    try:
+                        mod_addr = int(mod.vol.offset)
+                    except Exception:
+                        mod_addr = None
+                    if mod_addr is not None and mod_addr in self._module_dict_cache:
+                        mod_dict = self._module_dict_cache[mod_addr]
+                    else:
+                        mod_dict = mod.get_dict2()
+                        if mod_addr is not None:
+                            self._module_dict_cache[mod_addr] = mod_dict
 
                     if attr not in mod_dict:
                         break
@@ -284,20 +293,19 @@ class Dependency_Generator:
     # ------------------------------------------------------------------
     # Analyse a single callable (function / method / classmethod / …)
     # ------------------------------------------------------------------
-    def _analyse_callable(self, func_obj, known_modules: Set[str],parent_name: str = "") -> Set[str]:
+    def _analyse_callable(self, func_obj, known_modules: Set[str]) -> Set[str]:
         """
         Given a PyFunctionObject, disassemble its code + inner functions
         and return the set of module-level dependencies discovered from
         both IMPORT opcodes, CALL chains, and func_module resolution.
         """
-        # Dedup by address to avoid re-analyzing the same function
+        # Memoize by address: return cached deps if already analyzed.
         try:
             addr = int(func_obj.vol.offset)
-            if addr in self._analyzed_addrs:
-                return set()
-            self._analyzed_addrs.add(addr)
         except Exception:
-            pass
+            addr = None
+        if addr is not None and addr in self._callable_deps:
+            return self._callable_deps[addr]
 
         deps: Set[str] = set()
         try:
@@ -311,15 +319,25 @@ class Dependency_Generator:
             # (We don't add func_module_name to deps because that's
             #  typically the module we're currently analyzing.)
 
-            # Disassemble
+        
+            # Disassemble (memoized by code object address)
             code_obj = func_obj.func_code_obj.cast_to('PyCodeObject')
-            instructions, inner_codes = self._process_code(code_obj)
+            try:
+                code_addr = int(code_obj.vol.offset)
+            except Exception:
+                code_addr = None
+            if code_addr is not None and code_addr in self._code_cache:
+                instructions, inner_codes = self._code_cache[code_addr]
+            else:
+                instructions, inner_codes = self._process_code(code_obj)
+                if code_addr is not None:
+                    self._code_cache[code_addr] = (instructions, inner_codes)
 
             # 1) IMPORT_NAME / IMPORT_FROM
             deps |= self._extract_imports_from_bytecode(instructions)
 
             # 2) CALL chains with deep module resolution
-            deps |= self._extract_call_modules(instructions, func_globals_dict, parent_name)
+            deps |= self._extract_call_modules(instructions, func_globals_dict)
 
             # 3) Any name in func_globals that is a module and appears in
             #    LOAD_GLOBAL instructions → the function accesses it
@@ -330,7 +348,6 @@ class Dependency_Generator:
                     if name in func_globals_dict:
                         obj_type = self._get_type_name(func_globals_dict[name])
                         if obj_type == "module":
-                           if name != parent_name: 
                               deps.add(name)
 
             # 4) Scan ALL module-type entries in func_globals
@@ -340,19 +357,21 @@ class Dependency_Generator:
                 if gname.startswith('__'):
                     continue
                 gtype = self._get_type_name(gval)
-                if gtype == "module" and gname != parent_name:
+                if gtype == "module":
                     deps.add(gname)
 
             # 5) Recurse into inner functions (unlimited depth)
-            deps |= self._collect_inner_deps(inner_codes, func_globals_dict, parent_name)
+            deps |= self._collect_inner_deps(inner_codes, func_globals_dict)
 
         except Exception as e:
             print(f"    _analyse_callable error: {e}")
 
+        if addr is not None:
+           self._callable_deps[addr] = deps
         return deps
 
     def _collect_inner_deps(self, inner_codes: dict,
-                            func_globals_dict: dict, parent_name: str = "") -> Set[str]:
+                        func_globals_dict: dict) -> Set[str]:
         """
         Recursively collect dependencies from inner function code objects.
         Handles arbitrary nesting depth.
@@ -363,7 +382,7 @@ class Dependency_Generator:
             # Imports from this inner function
             deps |= self._extract_imports_from_bytecode(inner_instrs)
             # Call targets from this inner function
-            deps |= self._extract_call_modules(inner_instrs, func_globals_dict, parent_name)
+            deps |= self._extract_call_modules(inner_instrs, func_globals_dict)
             # LOAD_GLOBAL → module in globals
             for raw in inner_instrs:
                 parts = raw.split(' ', 1)
@@ -371,12 +390,12 @@ class Dependency_Generator:
                     name = parts[1].strip()
                     if name in func_globals_dict:
                         obj_type = self._get_type_name(func_globals_dict[name])
-                        if obj_type == "module" and name != parent_name:
+                        if obj_type == "module":
                             deps.add(name)
 
             # Recurse deeper
             if inner_nested:
-                deps |= self._collect_inner_deps(inner_nested, func_globals_dict, parent_name)
+                deps |= self._collect_inner_deps(inner_nested, func_globals_dict)
 
         return deps
 
@@ -454,8 +473,8 @@ class Dependency_Generator:
         '__version_info__', 'VERSION_INFO', '__VERSION_INFO__',
     ])
 
-    def _analyse_dict(self, mod_dict: dict, known_modules: Set[str], parent_name: str = "",
-                      depth: int = 0, max_depth: int = 2) -> Set[str]:
+    def _analyse_dict(self, mod_dict: dict, known_modules: Set[str],
+                  depth: int = 0, max_depth: int = 2) -> Set[str]:
         """
         Walk a module / class dict and collect dependency module names.
 
@@ -483,8 +502,7 @@ class Dependency_Generator:
                     dep_name = mod_o.get_name()
                     if dep_name:
                         top_level = dep_name.split('.')[0]
-                        if top_level != parent_name:
-                           deps.add(top_level)
+                        deps.add(top_level)
                 except Exception:
                     pass
                 continue  # don't recurse into foreign modules here
@@ -493,12 +511,12 @@ class Dependency_Generator:
             if vtype == "property":
                 # Analyze ALL property accessors, not just the first one
                 for func_obj in self._get_all_property_funcs(v):
-                    deps |= self._analyse_callable(func_obj, known_modules, parent_name)
+                    deps |= self._analyse_callable(func_obj, known_modules)
                 continue
 
             func_obj = self._unwrap_to_func(v, vtype)
             if func_obj is not None:
-                deps |= self._analyse_callable(func_obj, known_modules, parent_name)
+                deps |= self._analyse_callable(func_obj, known_modules)
                 continue
 
             # --- 3) Class types → recurse into tp_dict --------------------
@@ -511,7 +529,7 @@ class Dependency_Generator:
                         dict_obj = dict_ptr.dereference()
                         if self._get_type_name(dict_obj) == "dict":
                             class_dict = dict_obj.cast_to("PyDictObject").get_dict2()
-                            deps |= self._analyse_dict(class_dict, known_modules,  parent_name,depth + 1, max_depth)
+                            deps |= self._analyse_dict(class_dict, known_modules, depth + 1, max_depth)
                 except Exception:
                     pass
 
@@ -554,12 +572,6 @@ class Dependency_Generator:
         for category in ('application', 'third-party'):
             #for category in classified:
             for parent, entries in classified.get(category, {}).items():
-                # Reset per-module dedup so different modules can
-                # discover the same function independently
-                self._analyzed_addrs.clear()
-
-                print(f"\n  Analysing [{category}] {parent} "
-                      f"({len(entries)} sub-module(s)) …")
 
                 raw_deps: Set[str] = set()
 
@@ -569,13 +581,13 @@ class Dependency_Generator:
                         module_obj = mod_obj.cast_to("PyModuleObject")
                         mod_dict   = module_obj.get_dict2()
                     except Exception as e:
-                        print(f"    Could not read dict of {name}: {e}")
+                        #print(f"    Could not read dict of {name}: {e}")
                         continue
 
-                    entry_deps = self._analyse_dict(mod_dict, all_known, parent_name=parent)
+                    entry_deps = self._analyse_dict(mod_dict, all_known)
                     raw_deps |= entry_deps
 
-                    print(f"    {name}: {len(entry_deps)} raw deps")
+                    #print(f"    {name}: {len(entry_deps)} raw deps")
 
                 # Normalise to top-level parents and remove self-references
                 normalised = {
@@ -587,7 +599,7 @@ class Dependency_Generator:
 
                 graph[parent] = sorted(normalised)
 
-                print(f"    → {len(normalised)} dependencies: "
-                      f"{', '.join(sorted(normalised)) or '(none)'}")
+                #print(f"    → {len(normalised)} dependencies: "
+                     # f"{', '.join(sorted(normalised)) or '(none)'}")
 
         return graph
