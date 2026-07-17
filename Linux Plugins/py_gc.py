@@ -381,8 +381,56 @@ class Py_GC(interfaces.plugins.PluginInterface):
                 type_name = obj_type.get_name()
                 count += 1
 
-                if type_filter is None or type_name == type_filter:
-                    results.append((obj_addr, type_name, list_name, obj))
+                is_match = (type_filter is None or type_name == type_filter)
+                if not is_match and type_filter == 'module':
+                    # tp_base subclass check
+                    try:
+                       tp = obj.ob_type.dereference()
+                       while True:
+                          base_ptr = int(tp.tp_base)
+                          if not base_ptr or base_ptr < 0x1000:
+                             break
+                          tp = self.context.object(
+                               object_type=python_table_name + constants.BANG + "PyTypeObject",
+                               layer_name=self.process_layer,
+                               offset=base_ptr,
+                          )
+                          if tp.get_name() == 'module':
+                             is_match = True
+                             break
+                    except Exception:
+                           pass
+
+                    # Structural validation for type-swapped modules
+                    if not is_match and type_name == 'dict':
+                        try:
+                            mod = self.context.object(
+                                object_type=python_table_name + constants.BANG + "PyModuleObject",
+                                layer_name=self.process_layer,
+                                offset=obj_addr,
+                            )
+                            md_name_ptr = int(mod.md_name)
+                            md_dict_ptr = int(mod.md_dict)
+                            layer = self.context.layers[self.process_layer]
+                            if (md_name_ptr > 0x1000 and layer.is_valid(md_name_ptr, 16)
+                                    and md_dict_ptr > 0x1000 and layer.is_valid(md_dict_ptr, 24)):
+                                name_obj = self.context.object(
+                                    object_type=python_table_name + constants.BANG + "PyObject",
+                                    layer_name=self.process_layer,
+                                    offset=md_name_ptr,
+                                )
+                                dict_obj = self.context.object(
+                                    object_type=python_table_name + constants.BANG + "PyObject",
+                                    layer_name=self.process_layer,
+                                    offset=md_dict_ptr,
+                                )
+                                if name_obj.get_type_name() == 'str' and dict_obj.get_type_name() == 'dict':
+                                    is_match = True
+                        except Exception:
+                            pass
+
+                if is_match:
+                   results.append((obj_addr, type_name, list_name, obj))
 
                 # Advance to next GC head in the linked list
                 current_gc = self.context.object(
