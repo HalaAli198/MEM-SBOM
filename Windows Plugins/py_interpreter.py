@@ -351,7 +351,43 @@ class Py_Interpreter(interfaces.plugins.PluginInterface):
                 for mod_name, mod_val in modules_dict.items():
                     val_type = self.get_value_type(mod_val)
                     if val_type != "module":
-                        continue
+                          is_mod_sub = False
+                          # tp_base subclass check
+                          try:
+                            ob_type = mod_val.ob_type.dereference()
+                            base_ptr = int(ob_type.tp_base)
+                            while base_ptr and base_ptr > 0x1000:
+                               base_type = self.context.object(object_type=python_table_name + constants.BANG + "PyTypeObject",
+                               layer_name=self.process_layer, offset=base_ptr,)
+                               if base_type.get_name() == 'module':
+                                  is_mod_sub = True
+                                  break
+                               base_ptr = int(base_type.tp_base)
+                          except Exception:
+                             pass
+
+                          # Structural validation for type-swapped modules
+                          if not is_mod_sub and val_type == 'dict':
+                            try:
+                              candidate = mod_val.cast_to("PyModuleObject")
+                              md_name_ptr = int(candidate.md_name)
+                              md_dict_ptr = int(candidate.md_dict)
+                              layer = self.context.layers[self.process_layer]
+                              if (md_name_ptr > 0x1000 and layer.is_valid(md_name_ptr, 16)
+                                      and md_dict_ptr > 0x1000 and layer.is_valid(md_dict_ptr, 24)):
+                                name_obj = self.context.object(
+                                    object_type=python_table_name + constants.BANG + "PyObject",
+                                    layer_name=self.process_layer, offset=md_name_ptr,)
+                                dict_obj = self.context.object(
+                                    object_type=python_table_name + constants.BANG + "PyObject",
+                                    layer_name=self.process_layer, offset=md_dict_ptr,)
+                                if name_obj.get_type_name() == 'str' and dict_obj.get_type_name() == 'dict':
+                                    is_mod_sub = True
+                            except Exception:
+                              pass
+
+                          if not is_mod_sub:
+                             continue
                     mod_obj = mod_val.cast_to("PyModuleObject")
                     mod_dict = mod_obj.get_dict2()
                     addr = mod_obj.vol.offset
