@@ -351,6 +351,26 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     # Core scanner — walks a single memory region at 8-byte alignment
     # ------------------------------------------------------------------
+    def _is_module_subclass(self, type_ptr, layer):
+      """Check if type_ptr is 'module' or a subclass of it."""
+      visited = set()
+      ptr = type_ptr
+      while ptr and ptr > 0x1000 and ptr not in visited:
+        visited.add(ptr)
+        name = self._extract_type_name(ptr, layer)
+        if name == 'module':
+            return True
+        try:
+            pytype = self.context.object(
+                object_type=self._py_table + constants.BANG + "PyTypeObject",
+                layer_name=layer.name,
+                offset=ptr,
+            )
+            ptr = int(pytype.tp_base)
+        except Exception:
+            break
+      return False 
+    
     def _scan_region(self, task, region, type_filter=None):
         """
         Linear scan looking for PyObject headers (ob_refcnt, ob_type).
@@ -396,7 +416,7 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 scan_count += 1
                 continue
 
-            if type_name == 'module':
+            if type_name == 'module'or self._is_module_subclass(type_ptr, layer):
                 if self._validate_module(addr, layer):
                     info = self._extract_module_info(addr, layer)
                     results.append((addr, type_name, info))
