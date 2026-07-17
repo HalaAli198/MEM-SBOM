@@ -412,15 +412,23 @@ class Py_Heap(interfaces.plugins.PluginInterface):
                 continue
 
             if type_filter and type_name != type_filter:
-                addr += PTR_SIZE
-                scan_count += 1
-                continue
+               if type_filter == 'module' and self._is_module_subclass(type_ptr, layer):
+                  pass  # subclass of module — let it through
+               elif type_filter == 'module' and type_name == 'dict':
+                  pass  # possible type-swapped module — let structural check decide
+               else:
+                  addr += PTR_SIZE
+                  scan_count += 1
+                  continue
 
             if type_name == 'module'or self._is_module_subclass(type_ptr, layer):
                 if self._validate_module(addr, layer):
                     info = self._extract_module_info(addr, layer)
                     results.append((addr, type_name, info))
-            else:
+            elif type_name == 'dict' and self._validate_type_swapped_module(addr, layer):
+                 info = self._extract_module_info(addr, layer)
+                 results.append((addr, 'module', info))
+            elif not type_filter:
                 results.append((addr, type_name, {
                     'address': addr,
                     'refcnt': refcnt,
