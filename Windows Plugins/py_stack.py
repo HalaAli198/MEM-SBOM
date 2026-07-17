@@ -178,15 +178,47 @@ class Py_Stack(interfaces.plugins.PluginInterface):
                 cur_depth=0, max_depth=100
             )
             for mod_name, mod_val in modules_dict.items():
-                if self._type_name(mod_val) != "module":
-                    continue
+                tname = self._type_name(mod_val)
+                if tname != "module":
+                    is_mod_sub = False
+                    # tp_base subclass check
+                    try:
+                      tp = mod_val.ob_type.dereference()
+                      base_ptr = int(tp.tp_base)
+                      while base_ptr and base_ptr > 0x1000:
+                           base_tp = self._obj("PyTypeObject", base_ptr)
+                           if base_tp.get_name() == 'module':
+                              is_mod_sub = True
+                              break
+                           base_ptr = int(base_tp.tp_base)
+                    except Exception:
+                           pass
+
+                    # Structural validation for type-swapped modules
+                    if not is_mod_sub and tname == 'dict':
+                        try:
+                          candidate = mod_val.cast_to("PyModuleObject")
+                          md_name_ptr = int(candidate.md_name)
+                          md_dict_ptr = int(candidate.md_dict)
+                          layer = self.context.layers[self.process_layer]
+                          if (md_name_ptr > 0x1000 and layer.is_valid(md_name_ptr, 16)
+                                  and md_dict_ptr > 0x1000 and layer.is_valid(md_dict_ptr, 24)):
+                            name_obj = self._obj("PyObject", md_name_ptr)
+                            dict_obj = self._obj("PyObject", md_dict_ptr)
+                            if name_obj.get_type_name() == 'str' and dict_obj.get_type_name() == 'dict':
+                                is_mod_sub = True
+                        except Exception:
+                          pass
+
+                    if not is_mod_sub:
+                        continue
                 try:
                     name_to_mod[str(mod_name)] = mod_val.cast_to("PyModuleObject")
                 except Exception:
                     continue
         except Exception as e:
             print(f"  Could not read sys.modules: {e}")
-        print(f"  sys.modules map: {len(name_to_mod)} module objects resolved")
+        #print(f"  sys.modules map: {len(name_to_mod)} module objects resolved")
         return name_to_mod
 
     # ------------------------------------------------------------------
