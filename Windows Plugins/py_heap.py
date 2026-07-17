@@ -259,6 +259,28 @@ class Py_Heap(interfaces.plugins.PluginInterface):
     # ------------------------------------------------------------------
     # Module-specific validation
     # ------------------------------------------------------------------
+    def _validate_type_swapped_module(self, addr, layer):
+      """
+      Stricter validation for dict-typed objects that might be
+      type-swapped modules. Checks that md_dict contains '__name__',
+      a semantic invariant of every module dict that random dicts
+      don't satisfy.
+      """
+      if not self._validate_module(addr, layer):
+        return False
+      try:
+        mod = self.context.object(
+            object_type=self._py_table + constants.BANG + "PyModuleObject",
+            layer_name=layer.name,
+            offset=addr,
+        )
+        d = mod.get_dict2(cur_depth=0, max_depth=2)
+        if not isinstance(d, dict):
+            return False
+        return '__name__' in d
+      except Exception:
+        return False
+    
     def _validate_module(self, addr, layer):
         """
         Extra validation for module candidates:
